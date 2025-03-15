@@ -27,15 +27,17 @@ TRADE_PAIRS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT"]
 # Подключение к Binance Futures API (используем альтернативный сервер)
 exchange = ccxt.binance({
     'apiKey': BINANCE_API_KEY,
+    'secret': BINANCE_SECRET_KEY,
     'enableRateLimit': True,
     'options': {
-        'defaultType': 'future',
+        'defaultType': 'future',  # Используем реальные фьючерсы
         'adjustForTimeDifference': True
     },
     'urls': {
-        'api': 'https://api1.binance.com'  # ✅ Используем основной API Binance
+        'api': 'https://fapi.binance.com'  # ✅ Основной API Binance Futures
     }
 })
+
 
 
 print("📡 Подключение к Binance...")
