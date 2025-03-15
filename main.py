@@ -13,8 +13,8 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 # 🔹 Telegram-бот
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
 
-# 🔹 Торговые пары
-TRADE_PAIRS = ["btcusdt", "ethusdt", "solusdt", "xrpusdt", "adausdt", "dotusdt", "maticusdt", "bnbusdt", "linkusdt"]
+# 🔹 Торговые пары (добавили IP/USDT и TST/USDT)
+TRADE_PAIRS = ["btcusdt", "ethusdt", "solusdt", "xrpusdt", "adausdt", "dotusdt", "maticusdt", "bnbusdt", "linkusdt", "ipusdt", "tstusdt"]
 
 # 🔹 Данные для RSI (история свечей)
 candle_data = {pair: [] for pair in TRADE_PAIRS}
@@ -52,7 +52,7 @@ def send_chart(pair, prices, rsi):
     plt.axhline(70, color="red", linestyle="--")  # Линия перекупленности
     plt.legend()
 
-    # 🔹 Сохраняем график и отправляем в Telegram
+    # 🔹 Отправляем в Telegram
     img_buf = io.BytesIO()
     plt.savefig(img_buf, format="png")
     img_buf.seek(0)
