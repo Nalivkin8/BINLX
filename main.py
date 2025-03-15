@@ -18,6 +18,11 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 BINANCE_API_KEY = os.getenv("BINANCE_API_KEY")
 BINANCE_SECRET_KEY = os.getenv("BINANCE_SECRET_KEY")
 
+# 🔹 Проверка API-ключей
+if not all([TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, BINANCE_API_KEY, BINANCE_SECRET_KEY]):
+    print("❌ Ошибка: Не все API-ключи заданы. Проверь переменные окружения!")
+    exit()
+
 # 🔹 Binance API URL
 BINANCE_FUTURES_URL = "https://fapi.binance.com"
 
@@ -113,7 +118,7 @@ async def run_telegram_bot():
 # 🔹 WebSocket для фьючерсов
 TRADE_PAIRS = ["adausdt", "ipusdt", "tstusdt"]
 BINANCE_WS_URL = f"wss://fstream.binance.com/stream?streams=" + "/".join([f"{pair}@kline_5m" for pair in TRADE_PAIRS])
-candle_data = {pair: [] for pair in TRADE_PAIRS}
+candle_data = {pair: [] for pair in TRADE_PAIRS]
 
 def calculate_rsi(prices, period=14):
     if len(prices) < period:
