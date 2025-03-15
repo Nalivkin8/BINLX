@@ -1,108 +1,80 @@
-import ccxt
-import time
-import os
-import pandas as pd
+import websocket
+import json
+import numpy as np
 from telegram import Bot
-from dotenv import load_dotenv
+import os
 
-print("🚀 Запуск бота...")
-
-# 🔹 Загружаем API-ключи из .env (если используем локально)
-load_dotenv()
-
-# Получаем API-ключи из переменных Railway
-# Загружаем API-ключи из Railway
-BINANCE_API_KEY = os.getenv("BINANCE_API_KEY")
-BINANCE_SECRET_KEY = os.getenv("BINANCE_SECRET_KEY")  # ✅ Добавили эту строку
+# 🔹 Загружаем API-ключи из Railway Variables
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-if not BINANCE_API_KEY or not BINANCE_SECRET_KEY:
-    raise Exception("❌ Ошибка: API-ключи Binance не загружены! Проверь переменные в Railway.")
+# 🔹 Telegram-бот
+bot = Bot(token=TELEGRAM_BOT_TOKEN)
 
-print("✅ API-ключи загружены!")
+# 🔹 Торговые пары
+TRADE_PAIRS = ["btcusdt", "ethusdt", "solusdt", "xrpusdt"]
 
-# Торговые пары (фьючерсы)
-TRADE_PAIRS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT"]
+# 🔹 Данные для RSI (история свечей)
+candle_data = {pair: [] for pair in TRADE_PAIRS}
 
-# Подключение к Binance Futures API (используем альтернативный сервер)
-exchange = ccxt.binance({
-    'apiKey': BINANCE_API_KEY,
-    'secret': BINANCE_SECRET_KEY,
-    'enableRateLimit': True,
-    'options': {
-        'defaultType': 'future',
-        'adjustForTimeDifference': True
-    },
-    'urls': {
-        'api': {
-            'public': 'https://api1.binance.com',
-            'private': 'https://api1.binance.com'
-        }
-    }
-})
+# 🔹 Binance WebSocket URL
+SOCKETS = {pair: f"wss://fstream.binance.com/ws/{pair}@kline_15m" for pair in TRADE_PAIRS}
 
-
-
-print("📡 Подключение к Binance...")
-
-# Получение данных рынка
-def get_market_data(symbol, timeframe="15m"):
-    try:
-        print(f"📊 Получаю данные для {symbol}...")
-        candles = exchange.fetch_ohlcv(symbol, timeframe, limit=50)
-        df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-        df['close'] = df['close'].astype(float)
-        return df
-    except Exception as e:
-        print(f"⚠️ Ошибка при получении данных для {symbol}: {str(e)}")
+# 🔹 Функция расчёта RSI
+def calculate_rsi(prices, period=14):
+    if len(prices) < period:
         return None
-
-# Расчет RSI
-def calculate_rsi(df, period=14):
-    if df is None:
-        return None
-    delta = df['close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-    rs = gain / loss
+    delta = np.diff(prices)
+    gain = np.where(delta > 0, delta, 0)
+    loss = np.where(delta < 0, -delta, 0)
+    avg_gain = np.mean(gain[-period:])
+    avg_loss = np.mean(loss[-period:])
+    rs = avg_gain / avg_loss if avg_loss != 0 else 0
     rsi = 100 - (100 / (1 + rs))
-    return round(rsi.iloc[-1], 2)
+    return round(rsi, 2)
 
-# Функция отправки сигнала в Telegram
-def send_signal(message):
-    try:
-        print(f"📩 Отправляю сообщение в Telegram: {message}")
-        bot = Bot(token=TELEGRAM_BOT_TOKEN)
-        bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message)
-    except Exception as e:
-        print(f"⚠️ Ошибка при отправке сообщения в Telegram: {str(e)}")
+# 🔹 Функция обработки данных WebSocket
+def on_message(ws, message, pair):
+    data = json.loads(message)
+    candle = data['k']
+    price = float(candle['c'])  # Цена закрытия
+    is_closed = candle['x']  # True, если свеча закрылась
 
-# Основной цикл мониторинга рынка
-def monitor_market():
-    print("🚀 Запуск мониторинга рынка...")
-    while True:
-        for pair in TRADE_PAIRS:
-            df = get_market_data(pair)
-            if df is None:
-                continue
+    if is_closed:
+        candle_data[pair].append(price)
+        if len(candle_data[pair]) > 50:
+            candle_data[pair].pop(0)  # Удаляем старую свечу
 
-            rsi = calculate_rsi(df)
-            if rsi is None:
-                continue
-
-            last_price = df['close'].iloc[-1]
-            message = f"RSI {pair}: {rsi} | Цена: {last_price}"
-
-            print(f"📊 {message}")
-
+        # Рассчитываем RSI и отправляем сигнал в Telegram
+        rsi = calculate_rsi(candle_data[pair])
+        if rsi is not None:
+            message = None
             if rsi < 30:
-                send_signal(f"🚀 Лонг на {pair}!\nЦена: {last_price}\nRSI: {rsi} (Перепроданность!)")
+                message = f"🚀 Лонг {pair.upper()}!\nЦена: {price}\nRSI: {rsi} (Перепроданность)"
             elif rsi > 70:
-                send_signal(f"⚠️ Шорт на {pair}!\nЦена: {last_price}\nRSI: {rsi} (Перекупленность!)")
+                message = f"⚠️ Шорт {pair.upper()}!\nЦена: {price}\nRSI: {rsi} (Перекупленность)"
 
-        print("⏳ Жду 60 секунд перед следующим анализом...")
-        time.sleep(60)
+            if message:
+                bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message)
 
-# Запуск мониторинга
-monitor_market()
+# 🔹 Подключаем WebSocket для каждой торговой пары
+def connect_ws(pair):
+    def on_message_wrapper(ws, message):
+        on_message(ws, message, pair)
+
+    ws = websocket.WebSocketApp(
+        SOCKETS[pair],
+        on_message=on_message_wrapper,
+        on_open=lambda ws: print(f"✅ Подключено к {pair.upper()} WebSocket"),
+        on_error=lambda ws, error: print(f"⚠️ Ошибка WebSocket {pair.upper()}: {error}"),
+        on_close=lambda ws, code, msg: print(f"❌ WebSocket закрыт {pair.upper()}")
+    )
+    ws.run_forever()
+
+# 🔹 Запуск WebSocket для всех пар
+import threading
+for pair in TRADE_PAIRS:
+    thread = threading.Thread(target=connect_ws, args=(pair,))
+    thread.start()
+
+print("🚀 Бот запущен и отслеживает рынок через WebSocket!")
