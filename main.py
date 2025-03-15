@@ -4,10 +4,9 @@ import websocket
 import json
 import numpy as np
 import os
-import time
 import ccxt  
 from telegram import Bot, Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters
 
 # 🔹 Загружаем API-ключи из Railway Variables
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -40,6 +39,7 @@ bot = Bot(token=TELEGRAM_BOT_TOKEN)
 
 # 🔹 Функция отправки сообщения в Telegram (асинхронно)
 async def send_telegram_message(text):
+    print(f"📨 Отправка сообщения в Telegram: {text}")
     await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=text)
 
 # 🔹 Запуск бота (отправляем сообщение в Telegram)
@@ -100,22 +100,27 @@ async def start(update: Update, context):
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text("Выберите действие:", reply_markup=reply_markup)
 
-# 🔹 Создаём и запускаем Telegram-бот (замена Updater)
-def run_telegram_bot():
+# 🔹 Обработчик текстовых сообщений (логирование)
+async def handle_message(update: Update, context):
+    user_message = update.message.text
+    print(f"📩 Сообщение от пользователя: {user_message}")
+    await update.message.reply_text(f"Вы сказали: {user_message}")
+
+# 🔹 Запуск Telegram-бота в асинхронном режиме
+async def run_telegram_bot():
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CallbackQueryHandler(button_click))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    print("✅ Запуск Telegram-бота...")
-    application.run_polling()
-
-threading.Thread(target=run_telegram_bot, daemon=True).start()
+    print("✅ Telegram-бот запущен!")
+    await application.run_polling()
 
 # 🔹 Торговые пары
-TRADE_PAIRS = ["btcusdt", "ethusdt", "solusdt", "xrpusdt", "adausdt", "dotusdt", "maticusdt", "bnbusdt", "linkusdt", "ipusdt", "tstusdt"]
+TRADE_PAIRS = ["adausdt", "ipusdt", "tstusdt"]
 
-# 🔹 Объединённое WebSocket-соединение для всех пар
+# 🔹 WebSocket URL
 STREAMS = "/".join([f"{pair}@kline_15m" for pair in TRADE_PAIRS])
 BINANCE_WS_URL = f"wss://fstream.binance.com/stream?streams={STREAMS}"
 
@@ -140,12 +145,10 @@ def on_message(ws, message):
         pair = stream.split("@")[0].upper()
         kline = data["data"]["k"]
         price = float(kline["c"])
-        is_closed = kline["x"]
-
         print(f"📊 Данные получены для {pair} | Цена: {price}")
 
-# 🔹 Запуск WebSocket в отдельном потоке
-def start_websocket():
+# 🔹 Запуск WebSocket в асинхронном потоке
+async def start_websocket():
     ws = websocket.WebSocketApp(
         BINANCE_WS_URL,
         on_open=on_open,
@@ -155,4 +158,12 @@ def start_websocket():
     )
     ws.run_forever()
 
-threading.Thread(target=start_websocket, daemon=True).start()
+# 🔹 Запуск всего кода в асинхронном режиме
+async def main():
+    # Запускаем WebSocket и Telegram-бот в параллельных задачах
+    asyncio.create_task(start_websocket())
+    await run_telegram_bot()
+
+# 🔹 Запуск бота
+if __name__ == "__main__":
+    asyncio.run(main())
