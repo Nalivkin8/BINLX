@@ -20,12 +20,12 @@ BINANCE_SECRET_KEY = os.getenv("BINANCE_SECRET_KEY")
 # 🔹 Binance API URL
 BINANCE_FUTURES_URL = "https://fapi.binance.com"
 
-# 🔹 Проверка API-ключей
-if not all([TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, BINANCE_API_KEY, BINANCE_SECRET_KEY]):
-    print("❌ Ошибка: Не все API-ключи заданы. Проверь переменные окружения!")
-    exit()
+# 🔹 WebSocket URL
+TRADE_PAIRS = ["adausdt", "ipusdt", "tstusdt"]
+BINANCE_WS_URL = f"wss://fstream.binance.com/stream?streams=" + "/".join([f"{pair}@kline_5m" for pair in TRADE_PAIRS])
 
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
+candle_data = {pair: [] for pair in TRADE_PAIRS}
 
 def sign_request(params):
     """Создаёт подпись для Binance API"""
@@ -40,7 +40,7 @@ async def send_telegram_message(text):
     await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=text)
 
 async def get_balance():
-    """Запрос баланса и PnL"""
+    """Запрос баланса"""
     url = f"{BINANCE_FUTURES_URL}/fapi/v2/account"
     headers = {"X-MBX-APIKEY": BINANCE_API_KEY}
     params = sign_request({"timestamp": int(time.time() * 1000)})
@@ -77,40 +77,8 @@ async def get_open_positions():
         print(f"❌ Ошибка получения позиций: {e}")
         return "❌ Ошибка при получении позиций"
 
-async def place_order(symbol, side, quantity, order_type="MARKET", price=None):
-    """Создание ордера (Маркет или Лимит)"""
-    url = f"{BINANCE_FUTURES_URL}/fapi/v1/order"
-    headers = {"X-MBX-APIKEY": BINANCE_API_KEY}
-
-    params = {
-        "symbol": symbol.upper(),
-        "side": side.upper(),
-        "type": order_type,
-        "quantity": quantity,
-        "timestamp": int(time.time() * 1000),
-    }
-
-    if order_type == "LIMIT":
-        params["price"] = price
-        params["timeInForce"] = "GTC"  # GTC = Good Till Cancelled
-
-    params = sign_request(params)
-
-    try:
-        response = requests.post(url, headers=headers, params=params)
-        data = response.json()
-        if "orderId" in data:
-            return f"✅ Ордер {side} {symbol} на {quantity} контрактов успешно создан!"
-        else:
-            return f"❌ Ошибка: {data}"
-    except Exception as e:
-        return f"❌ Ошибка отправки ордера: {e}"
-
 async def start(update: Update, context):
-    keyboard = [
-        [KeyboardButton("📊 Баланс"), KeyboardButton("📈 Открытые сделки")],
-        [KeyboardButton("🚀 Лонг ADA"), KeyboardButton("⚠️ Шорт ADA")],
-    ]
+    keyboard = [[KeyboardButton("📊 Баланс"), KeyboardButton("📈 Открытые сделки")]]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
     await update.message.reply_text("✅ Бот запущен! Выберите действие:", reply_markup=reply_markup)
 
@@ -122,12 +90,6 @@ async def handle_message(update: Update, context):
     elif text == "📈 Открытые сделки":
         positions = await get_open_positions()
         await update.message.reply_text(positions)
-    elif text == "🚀 Лонг ADA":
-        msg = await place_order("ADAUSDT", "BUY", 1)
-        await update.message.reply_text(msg)
-    elif text == "⚠️ Шорт ADA":
-        msg = await place_order("ADAUSDT", "SELL", 1)
-        await update.message.reply_text(msg)
     else:
         await update.message.reply_text("❌ Команда не распознана")
 
@@ -139,8 +101,62 @@ async def run_telegram_bot():
     print("✅ Telegram-бот запущен!")
     await application.run_polling()
 
+def calculate_rsi(prices, period=14):
+    if len(prices) < period:
+        return None
+    delta = np.diff(prices)
+    gain = np.where(delta > 0, delta, 0)
+    loss = np.where(delta < 0, -delta, 0)
+    avg_gain = np.mean(gain[-period:])
+    avg_loss = np.mean(loss[-period:])
+    
+    if avg_loss == 0:
+        return 100
+    if avg_gain == 0:
+        return 0
+    
+    rs = avg_gain / avg_loss
+    return round(100 - (100 / (1 + rs)), 2)
+
+def on_message(ws, message):
+    """Обработка входящих данных из WebSocket"""
+    data = json.loads(message)
+    if "stream" in data and "data" in data:
+        stream = data["stream"]
+        pair = stream.split("@")[0].upper()
+        price = float(data["data"]["k"]["c"])
+        is_closed = data["data"]["k"]["x"]
+
+        print(f"📊 {pair} | Цена: {price}")
+
+        if is_closed:
+            candle_data[pair].append(price)
+
+            if len(candle_data[pair]) > 50:
+                candle_data[pair].pop(0)
+
+            rsi = calculate_rsi(candle_data[pair])
+            if rsi is not None:
+                print(f"📊 {pair} RSI: {rsi}")
+                if rsi < 30:
+                    asyncio.create_task(send_telegram_message(f"🚀 Лонг {pair}!\nЦена: {price}\nRSI: {rsi}"))
+                elif rsi > 70:
+                    asyncio.create_task(send_telegram_message(f"⚠️ Шорт {pair}!\nЦена: {price}\nRSI: {rsi}"))
+
+def start_websocket():
+    """Запуск WebSocket"""
+    ws = websocket.WebSocketApp(BINANCE_WS_URL, on_message=on_message)
+    ws.run_forever()
+
 async def main():
-    await run_telegram_bot()
+    """Запуск бота и WebSocket в одном event loop"""
+    loop = asyncio.get_running_loop()
+    
+    # Запускаем Telegram-бота и WebSocket в параллельных задачах
+    telegram_task = loop.create_task(run_telegram_bot())
+    websocket_task = loop.run_in_executor(None, start_websocket)
+
+    await asyncio.gather(telegram_task, websocket_task)
 
 if __name__ == "__main__":
     asyncio.run(main())
