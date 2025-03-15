@@ -2,11 +2,11 @@ import json
 import asyncio
 import requests
 import os
-from dotenv import load_dotenv
-from binance.client import Client
-from binance.enums import *
-from telegram import Bot
 import websockets  # Убедимся, что websockets установлен
+from python_binance.client import Client
+from python_binance.enums import *
+from telegram import Bot
+from dotenv import load_dotenv
 
 # Загрузка переменных окружения
 load_dotenv()
@@ -87,6 +87,6 @@ with open("requirements.txt", "w") as f:
 python-binance
 python-telegram-bot
 websockets
-dotenv
+python-dotenv
 requests
 """)
