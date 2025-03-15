@@ -9,6 +9,7 @@ import websocket
 from urllib.parse import urlencode
 from telegram import Bot, Update, KeyboardButton, ReplyKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
+import numpy as np
 
 # 🔹 API-ключи
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -19,7 +20,11 @@ BINANCE_SECRET_KEY = os.getenv("BINANCE_SECRET_KEY")
 # 🔹 Binance API URL
 BINANCE_FUTURES_URL = "https://fapi.binance.com"
 
-# 🔹 Подключение к Binance API
+# 🔹 Проверка API-ключей
+if not all([TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, BINANCE_API_KEY, BINANCE_SECRET_KEY]):
+    print("❌ Ошибка: Не все API-ключи заданы. Проверь переменные окружения!")
+    exit()
+
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
 
 def sign_request(params):
@@ -102,8 +107,59 @@ async def run_telegram_bot():
     print("✅ Telegram-бот запущен!")
     await application.run_polling()
 
+# 🔹 WebSocket Binance Futures
+TRADE_PAIRS = ["adausdt", "ipusdt", "tstusdt"]
+BINANCE_WS_URL = f"wss://fstream.binance.com/stream?streams=" + "/".join([f"{pair}@kline_5m" for pair in TRADE_PAIRS])
+candle_data = {pair: [] for pair in TRADE_PAIRS}
+
+def calculate_rsi(prices, period=14):
+    if len(prices) < period:
+        return None
+    delta = np.diff(prices)
+    gain = np.where(delta > 0, delta, 0)
+    loss = np.where(delta < 0, -delta, 0)
+    avg_gain = np.mean(gain[-period:])
+    avg_loss = np.mean(loss[-period:])
+    
+    if avg_loss == 0:
+        return 100
+    if avg_gain == 0:
+        return 0
+    
+    rs = avg_gain / avg_loss
+    return round(100 - (100 / (1 + rs)), 2)
+
+def on_message(ws, message):
+    data = json.loads(message)
+    if "stream" in data and "data" in data:
+        stream = data["stream"]
+        pair = stream.split("@")[0].upper()
+        price = float(data["data"]["k"]["c"])
+        is_closed = data["data"]["k"]["x"]
+
+        print(f"📊 {pair} | Цена: {price}")
+
+        if is_closed:
+            candle_data[pair].append(price)
+
+            if len(candle_data[pair]) > 50:
+                candle_data[pair].pop(0)
+
+            rsi = calculate_rsi(candle_data[pair])
+            if rsi is not None:
+                print(f"📊 {pair} RSI: {rsi}")
+                if rsi < 30:
+                    asyncio.run(send_telegram_message(f"🚀 Лонг {pair}!\nЦена: {price}\nRSI: {rsi}"))
+                elif rsi > 70:
+                    asyncio.run(send_telegram_message(f"⚠️ Шорт {pair}!\nЦена: {price}\nRSI: {rsi}"))
+
+async def start_websocket():
+    ws = websocket.WebSocketApp(BINANCE_WS_URL, on_message=on_message)
+    ws.run_forever()
+
 async def main():
-    await run_telegram_bot()
+    asyncio.create_task(run_telegram_bot())
+    await start_websocket()
 
 if __name__ == "__main__":
     asyncio.run(main())
