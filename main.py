@@ -39,57 +39,72 @@ async def send_telegram_message(text):
     print(f"📨 Telegram: {text}")
     await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=text)
 
-async def get_balance():
-    """Запрос баланса"""
-    url = f"{BINANCE_FUTURES_URL}/fapi/v2/account"
-    headers = {"X-MBX-APIKEY": BINANCE_API_KEY}
-    params = sign_request({"timestamp": int(time.time() * 1000)})
+async def get_order_book(symbol):
+    """Запрос стакана ордеров"""
+    url = f"{BINANCE_FUTURES_URL}/fapi/v1/depth"
+    params = {"symbol": symbol.upper(), "limit": 10}
 
     try:
-        response = requests.get(url, headers=headers, params=params)
+        response = requests.get(url, params=params)
         data = response.json()
-        balance = float(data["totalWalletBalance"])
-        unrealized_pnl = float(data["totalUnrealizedProfit"])
-        return balance, unrealized_pnl
-    except Exception as e:
-        print(f"❌ Ошибка получения баланса: {e}")
-        return 0, 0
+        bids = data["bids"][:5]  # 5 лучших заявок на покупку
+        asks = data["asks"][:5]  # 5 лучших заявок на продажу
 
-async def get_open_positions():
-    """Запрос активных позиций"""
-    url = f"{BINANCE_FUTURES_URL}/fapi/v2/positionRisk"
-    headers = {"X-MBX-APIKEY": BINANCE_API_KEY}
-    params = sign_request({"timestamp": int(time.time() * 1000)})
+        order_book = f"📊 Order Book {symbol.upper()}:\n\n"
+        order_book += "🔹 **Покупатели (Bids):**\n"
+        for bid in bids:
+            order_book += f"Цена: {bid[0]} | Кол-во: {bid[1]}\n"
+        
+        order_book += "\n🔻 **Продавцы (Asks):**\n"
+        for ask in asks:
+            order_book += f"Цена: {ask[0]} | Кол-во: {ask[1]}\n"
+
+        return order_book
+    except Exception as e:
+        return f"❌ Ошибка запроса стакана ордеров: {e}"
+
+async def get_recent_trades(symbol):
+    """Запрос последних сделок"""
+    url = f"{BINANCE_FUTURES_URL}/fapi/v1/trades"
+    params = {"symbol": symbol.upper(), "limit": 5}
 
     try:
-        response = requests.get(url, headers=headers, params=params)
-        positions = response.json()
-        open_positions = [p for p in positions if float(p['positionAmt']) != 0]
+        response = requests.get(url, params=params)
+        trades = response.json()
 
-        if not open_positions:
-            return "📌 Нет открытых позиций"
+        trade_report = f"📈 Последние сделки {symbol.upper()}:\n"
+        for trade in trades:
+            price = trade["price"]
+            qty = trade["qty"]
+            side = "🟢 Покупка" if trade["isBuyerMaker"] else "🔴 Продажа"
+            trade_report += f"{side} | Цена: {price} | Кол-во: {qty}\n"
 
-        report = "📊 Открытые сделки:\n"
-        for pos in open_positions:
-            report += f"🔹 {pos['symbol']}: {pos['positionAmt']} контрактов\nPnL: {round(float(pos['unRealizedProfit']), 2)} USDT\n\n"
-        return report
+        return trade_report
     except Exception as e:
-        print(f"❌ Ошибка получения позиций: {e}")
-        return "❌ Ошибка при получении позиций"
+        return f"❌ Ошибка запроса сделок: {e}"
 
 async def start(update: Update, context):
-    keyboard = [[KeyboardButton("📊 Баланс"), KeyboardButton("📈 Открытые сделки")]]
+    keyboard = [
+        [KeyboardButton("📊 Order Book ADA"), KeyboardButton("📈 Сделки ADA")],
+        [KeyboardButton("📊 Order Book IP"), KeyboardButton("📈 Сделки IP")],
+    ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
     await update.message.reply_text("✅ Бот запущен! Выберите действие:", reply_markup=reply_markup)
 
 async def handle_message(update: Update, context):
     text = update.message.text
-    if text == "📊 Баланс":
-        balance, pnl = await get_balance()
-        await update.message.reply_text(f"💰 Баланс: {balance} USDT\n📈 PnL: {pnl} USDT")
-    elif text == "📈 Открытые сделки":
-        positions = await get_open_positions()
-        await update.message.reply_text(positions)
+    if text == "📊 Order Book ADA":
+        result = await get_order_book("ADAUSDT")
+        await update.message.reply_text(result)
+    elif text == "📈 Сделки ADA":
+        result = await get_recent_trades("ADAUSDT")
+        await update.message.reply_text(result)
+    elif text == "📊 Order Book IP":
+        result = await get_order_book("IPUSDT")
+        await update.message.reply_text(result)
+    elif text == "📈 Сделки IP":
+        result = await get_recent_trades("IPUSDT")
+        await update.message.reply_text(result)
     else:
         await update.message.reply_text("❌ Команда не распознана")
 
@@ -100,23 +115,6 @@ async def run_telegram_bot():
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     print("✅ Telegram-бот запущен!")
     await application.run_polling()
-
-def calculate_rsi(prices, period=14):
-    if len(prices) < period:
-        return None
-    delta = np.diff(prices)
-    gain = np.where(delta > 0, delta, 0)
-    loss = np.where(delta < 0, -delta, 0)
-    avg_gain = np.mean(gain[-period:])
-    avg_loss = np.mean(loss[-period:])
-    
-    if avg_loss == 0:
-        return 100
-    if avg_gain == 0:
-        return 0
-    
-    rs = avg_gain / avg_loss
-    return round(100 - (100 / (1 + rs)), 2)
 
 def on_message(ws, message):
     """Обработка входящих данных из WebSocket"""
@@ -135,15 +133,7 @@ def on_message(ws, message):
             if len(candle_data[pair]) > 50:
                 candle_data[pair].pop(0)
 
-            rsi = calculate_rsi(candle_data[pair])
-            if rsi is not None:
-                print(f"📊 {pair} RSI: {rsi}")
-                if rsi < 30:
-                    asyncio.create_task(send_telegram_message(f"🚀 Лонг {pair}!\nЦена: {price}\nRSI: {rsi}"))
-                elif rsi > 70:
-                    asyncio.create_task(send_telegram_message(f"⚠️ Шорт {pair}!\nЦена: {price}\nRSI: {rsi}"))
-
-def start_websocket():
+async def start_websocket():
     """Запуск WebSocket"""
     ws = websocket.WebSocketApp(BINANCE_WS_URL, on_message=on_message)
     ws.run_forever()
