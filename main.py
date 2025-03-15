@@ -1,5 +1,4 @@
 import asyncio
-import threading
 import websocket
 import json
 import numpy as np
@@ -46,10 +45,8 @@ async def send_telegram_message(text):
 async def startup_message():
     await send_telegram_message("🚀 Бот запущен и отслеживает рынок!")
 
-asyncio.run(startup_message())
-
-# 🔹 Запрос баланса
-def get_balance():
+async def get_balance():
+    """Запрос баланса"""
     try:
         balance_info = exchange.fetch_balance()
         balance = balance_info['total'].get('USDT', 0)
@@ -60,11 +57,11 @@ def get_balance():
 
 async def show_balance(update: Update, context):
     """Обработчик кнопки Баланс"""
-    balance = get_balance()
+    balance = await get_balance()
     await update.message.reply_text(f"💰 Баланс: {balance} USDT")
 
-# 🔹 Запрос активных позиций
-def get_open_positions():
+async def get_open_positions():
+    """Запрос активных позиций"""
     try:
         positions = exchange.fetch_positions()
         open_positions = [p for p in positions if float(p['contracts']) > 0]
@@ -81,7 +78,7 @@ def get_open_positions():
 
 async def show_positions(update: Update, context):
     """Обработчик кнопки Открытые сделки"""
-    positions = get_open_positions()
+    positions = await get_open_positions()
     await update.message.reply_text(positions)
 
 async def start(update: Update, context):
@@ -111,8 +108,6 @@ async def run_telegram_bot():
     print("✅ Telegram-бот запущен!")
     await application.run_polling()
 
-threading.Thread(target=lambda: asyncio.run(run_telegram_bot()), daemon=True).start()
-
 # 🔹 Торговые пары (Только ADAUSDT, IPUSDT, TSTUSDT)
 TRADE_PAIRS = ["adausdt", "ipusdt", "tstusdt"]
 
@@ -128,7 +123,7 @@ def on_open(ws):
 
 def on_close(ws, close_status_code, close_msg):
     print("❌ WebSocket закрыт! Переподключение...")
-    time.sleep(5)
+    asyncio.run(asyncio.sleep(5))
     ws.run_forever()
 
 def on_error(ws, error):
@@ -190,6 +185,8 @@ async def start_websocket():
     ws.run_forever()
 
 async def main():
+    """Основной запуск"""
+    await startup_message()
     asyncio.create_task(start_websocket())
     await run_telegram_bot()
 
