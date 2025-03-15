@@ -4,11 +4,10 @@ import websocket
 import json
 import numpy as np
 import os
-import schedule
 import time
-from telegram import Bot, Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, CallbackContext
 import ccxt  
+from telegram import Bot, Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler
 
 # 🔹 Загружаем API-ключи из Railway Variables
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -46,15 +45,6 @@ async def send_telegram_message(text):
 # 🔹 Запуск бота (отправляем сообщение в Telegram)
 asyncio.run(send_telegram_message("🚀 Бот запущен и работает!"))
 
-# 🔹 Telegram-обработчик команд
-def start(update: Update, context: CallbackContext):
-    keyboard = [
-        [InlineKeyboardButton("📊 Баланс", callback_data="balance")],
-        [InlineKeyboardButton("📈 Открытые сделки", callback_data="positions")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    update.message.reply_text("Выберите действие:", reply_markup=reply_markup)
-
 # 🔹 Запрос баланса
 def get_balance():
     try:
@@ -65,10 +55,10 @@ def get_balance():
         print(f"❌ Ошибка получения баланса: {e}")
         return 0
 
-def show_balance(update: Update, context: CallbackContext):
+async def show_balance(update: Update, context):
     balance = get_balance()
-    update.callback_query.answer()
-    update.callback_query.message.reply_text(f"💰 Ваш баланс: {balance} USDT")
+    await update.callback_query.answer()
+    await update.callback_query.message.reply_text(f"💰 Ваш баланс: {balance} USDT")
 
 # 🔹 Запрос активных позиций
 def get_open_positions():
@@ -88,30 +78,37 @@ def get_open_positions():
         print(f"❌ Ошибка получения позиций: {e}")
         return "❌ Ошибка при получении позиций"
 
-def show_positions(update: Update, context: CallbackContext):
+async def show_positions(update: Update, context):
     positions = get_open_positions()
-    update.callback_query.answer()
-    update.callback_query.message.reply_text(positions)
+    await update.callback_query.answer()
+    await update.callback_query.message.reply_text(positions)
 
 # 🔹 Обработчик кнопок
-def button_click(update: Update, context: CallbackContext):
+async def button_click(update: Update, context):
     query = update.callback_query
     if query.data == "balance":
-        show_balance(update, context)
+        await show_balance(update, context)
     elif query.data == "positions":
-        show_positions(update, context)
+        await show_positions(update, context)
 
-# 🔹 Настройка Telegram-хендлеров
-updater = Updater(TELEGRAM_BOT_TOKEN, use_context=True)
-dp = updater.dispatcher
-dp.add_handler(CommandHandler("start", start))
-dp.add_handler(CallbackQueryHandler(button_click))
+# 🔹 Обработчик команды /start
+async def start(update: Update, context):
+    keyboard = [
+        [InlineKeyboardButton("📊 Баланс", callback_data="balance")],
+        [InlineKeyboardButton("📈 Открытые сделки", callback_data="positions")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text("Выберите действие:", reply_markup=reply_markup)
 
-# 🔹 Запуск Telegram-бота в потоке
+# 🔹 Создаём и запускаем Telegram-бот (замена Updater)
 def run_telegram_bot():
+    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CallbackQueryHandler(button_click))
+
     print("✅ Запуск Telegram-бота...")
-    updater.start_polling()
-    updater.idle()
+    application.run_polling()
 
 threading.Thread(target=run_telegram_bot, daemon=True).start()
 
