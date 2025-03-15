@@ -15,8 +15,16 @@ TRADE_PAIRS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT"]
 # Подключение к Binance
 exchange = ccxt.binance({
     'apiKey': BINANCE_API_KEY,
-    'enableRateLimit': True
+    'enableRateLimit': True,
+    'options': {
+        'defaultType': 'spot',
+        'adjustForTimeDifference': True
+    },
+    'urls': {
+        'api': 'https://api1.binance.com'
+    }
 })
+
 
 # Получение данных рынка
 def get_market_data(symbol, timeframe="15m"):
