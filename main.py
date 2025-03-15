@@ -1,3 +1,4 @@
+import asyncio
 import websocket
 import json
 import numpy as np
@@ -37,7 +38,13 @@ except Exception as e:
 
 # 🔹 Telegram-бот
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
-bot.send_message(chat_id=TELEGRAM_CHAT_ID, text="🚀 Бот запущен и работает!")
+
+# 🔹 Функция отправки сообщения в Telegram (асинхронно)
+async def send_telegram_message(text):
+    await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=text)
+
+# 🔹 Запуск бота (отправляем сообщение в Telegram)
+asyncio.run(send_telegram_message("🚀 Бот запущен и работает!"))
 
 # 🔹 Торговые пары
 TRADE_PAIRS = ["btcusdt", "ethusdt", "solusdt", "xrpusdt", "adausdt", "dotusdt", "maticusdt", "bnbusdt", "linkusdt", "ipusdt", "tstusdt"]
@@ -46,14 +53,14 @@ TRADE_PAIRS = ["btcusdt", "ethusdt", "solusdt", "xrpusdt", "adausdt", "dotusdt",
 candle_data = {pair: [] for pair in TRADE_PAIRS}
 candle_volumes = {pair: [] for pair in TRADE_PAIRS}
 
-# 🔹 WebSocket URL (альтернативный сервер Binance)
-SOCKETS = {pair: f"wss://fstream3.binance.com/ws/{pair}@kline_15m" for pair in TRADE_PAIRS}
+# 🔹 WebSocket URL (правильный формат)
+SOCKETS = {pair: f"wss://fstream.binance.com/ws/{pair}@kline_15m" for pair in TRADE_PAIRS}
 
 # 🔹 Логирование сделок
 daily_trades = 0
 total_profit_loss = 0
 
-# 🔹 Функция для проверки WebSocket-подключений
+# 🔹 WebSocket обработчики
 def on_open(ws):
     print("✅ WebSocket подключён!")
 
@@ -65,7 +72,7 @@ def on_close(ws, close_status_code, close_msg):
 def on_error(ws, error):
     print(f"⚠️ Ошибка WebSocket: {error}")
 
-# 🔹 Функция обработки входящих данных WebSocket
+# 🔹 Обработка входящих данных WebSocket
 def on_message(ws, message, pair):
     global daily_trades, total_profit_loss
     data = json.loads(message)
@@ -97,10 +104,10 @@ def on_message(ws, message, pair):
         # 🔹 Отправка сообщений в Telegram при нужных условиях
         if rsi < 30:
             message = f"🚀 Лонг {pair.upper()}!\nЦена: {price}\nRSI: {rsi}"
-            bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message)
+            asyncio.run(send_telegram_message(message))
         elif rsi > 70:
             message = f"⚠️ Шорт {pair.upper()}!\nЦена: {price}\nRSI: {rsi}"
-            bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message)
+            asyncio.run(send_telegram_message(message))
 
 # 🔹 Функция расчёта RSI
 def calculate_rsi(prices, period=14):
@@ -129,7 +136,7 @@ def get_balance():
 def daily_report():
     balance = get_balance()
     report = f"📊 Дневной отчёт\n🔹 Баланс: {balance} USDT\n🔹 Сделок за сутки: {daily_trades}\n🔹 Общий P/L: {round(total_profit_loss, 2)} USDT"
-    bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=report)
+    asyncio.run(send_telegram_message(report))
     print("✅ Дневной отчёт отправлен!")
 
 schedule.every().day.at("00:00").do(daily_report)
