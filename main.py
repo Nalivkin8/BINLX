@@ -1,94 +1,93 @@
-import asyncio
-import requests
 import json
+import asyncio
+import websockets
+import requests
 import os
-import hmac
-import hashlib
-import time
-import websocket
-from urllib.parse import urlencode
-from telegram import Bot, Update, KeyboardButton, ReplyKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, filters
+from dotenv import load_dotenv
+from binance.client import Client
+from binance.enums import *
+from telegram import Bot
 
-# 🔹 API-ключи
+# Загрузка переменных окружения
+load_dotenv()
+
+API_KEY = os.getenv("BINANCE_API_KEY")
+API_SECRET = os.getenv("BINANCE_API_SECRET")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-BINANCE_API_KEY = os.getenv("BINANCE_API_KEY")
-BINANCE_SECRET_KEY = os.getenv("BINANCE_SECRET_KEY")
 
-# 🔹 Binance API URL
-BINANCE_FUTURES_URL = "https://fapi.binance.com"
+# Проверяем, загружены ли переменные окружения
+if not all([API_KEY, API_SECRET, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID]):
+    raise ValueError("Не все переменные окружения загружены! Проверьте .env файл.")
 
-# 🔹 Поддерживаемые пары
-TRADE_PAIRS = ["ADAUSDT", "IPUSDT", "TSTUSDT"]
-
+# Подключаем клиента Binance
+client = Client(API_KEY, API_SECRET)
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
 
-def sign_request(params):
-    """🔹 Создаёт подпись для Binance API"""
-    params["timestamp"] = int(time.time() * 1000)
-    query_string = urlencode(params)
-    signature = hmac.new(BINANCE_SECRET_KEY.encode(), query_string.encode(), hashlib.sha256).hexdigest()
-    params["signature"] = signature
-    return params
+# Подключение к WebSocket Binance
+async def binance_websocket(symbol):
+    url = f"wss://stream.binance.com:9443/ws/{symbol}@kline_1m"
+    async with websockets.connect(url) as websocket:
+        while True:
+            try:
+                data = await websocket.recv()
+                process_message(json.loads(data))
+            except Exception as e:
+                print(f"Ошибка WebSocket: {e}")
+                await asyncio.sleep(5)  # Переподключение через 5 сек
 
-async def get_order_book(symbol):
-    """🔹 Запрос стакана ордеров"""
-    url = f"{BINANCE_FUTURES_URL}/fapi/v1/depth"
-    params = {"symbol": symbol.upper(), "limit": 10}  # Получаем 10 лучших заявок
+# Обработка полученных данных
 
-    try:
-        response = requests.get(url, params=params)
-        data = response.json()
-        bids = data["bids"][:5]  # 5 лучших заявок на покупку
-        asks = data["asks"][:5]  # 5 лучших заявок на продажу
+def process_message(message):
+    kline = message.get("k", {})
+    close_price = float(kline.get("c", 0))
+    volume = float(kline.get("v", 0))
+    
+    signal = analyze_market(close_price, volume)
+    if signal:
+        send_telegram_message(signal)
 
-        order_book = f"📊 **Order Book {symbol.upper()}**\n\n"
-        order_book += "🔹 **Покупатели (BIDS):**\n"
-        for bid in bids:
-            order_book += f"💚 {bid[0]} | Кол-во: {bid[1]}\n"
-        
-        order_book += "\n🔻 **Продавцы (ASKS):**\n"
-        for ask in asks:
-            order_book += f"❤️ {ask[0]} | Кол-во: {ask[1]}\n"
+# Анализ рынка (простая логика для примера)
+def analyze_market(price, volume):
+    if volume > 100:  # Пример: если объём больше 100, даём сигнал
+        return f"Сигнал: {'ЛОНГ' if price % 2 == 0 else 'ШОРТ'}\nЦена: {price}\nОбъём: {volume}"
+    return None
 
-        return order_book
-    except Exception as e:
-        return f"❌ Ошибка запроса стакана ордеров: {e}"
+# Отправка сигнала в Telegram
+def send_telegram_message(message):
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    data = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
+    response = requests.post(url, data=data)
+    if response.status_code != 200:
+        print(f"Ошибка отправки в Telegram: {response.text}")
 
-async def start(update: Update, context):
-    keyboard = [
-        [KeyboardButton("📊 Order Book ADA"), KeyboardButton("📊 Order Book IP")],
-        [KeyboardButton("📊 Order Book TST")],
-    ]
-    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
-    await update.message.reply_text("✅ Бот запущен! Выберите действие:", reply_markup=reply_markup)
-
-async def handle_message(update: Update, context):
-    text = update.message.text
-    if text == "📊 Order Book ADA":
-        result = await get_order_book("ADAUSDT")
-        await update.message.reply_text(result)
-    elif text == "📊 Order Book IP":
-        result = await get_order_book("IPUSDT")
-        await update.message.reply_text(result)
-    elif text == "📊 Order Book TST":
-        result = await get_order_book("TSTUSDT")
-        await update.message.reply_text(result)
-    else:
-        await update.message.reply_text("❌ Команда не распознана")
-
-async def run_telegram_bot():
-    """🔹 Запуск Telegram-бота"""
-    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    print("✅ Telegram-бот запущен!")
-    await application.run_polling()
-
-async def main():
-    """🔹 Запуск Telegram-бота и Order Book"""
-    await run_telegram_bot()
-
+# Запуск WebSocket
 if __name__ == "__main__":
-    asyncio.run(main(), debug=True)
+    symbol = "btcusdt"  # Пара для торговли
+    try:
+        asyncio.run(binance_websocket(symbol))
+    except KeyboardInterrupt:
+        print("Программа остановлена пользователем.")
+
+# Файл .env.example
+with open(".env.example", "w") as f:
+    f.write("""
+BINANCE_API_KEY=
+BINANCE_API_SECRET=
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_CHAT_ID=
+""")
+
+# Файл Procfile
+with open("Procfile", "w") as f:
+    f.write("worker: python main.py")
+
+# Файл requirements.txt
+with open("requirements.txt", "w") as f:
+    f.write("""
+python-binance
+python-telegram-bot
+websockets
+dotenv
+requests
+""")
