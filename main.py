@@ -31,13 +31,17 @@ exchange = ccxt.binance({
     'secret': BINANCE_SECRET_KEY,
     'enableRateLimit': True,
     'options': {
-        'defaultType': 'future',  # Используем реальные фьючерсы
+        'defaultType': 'future',  # ✅ Фьючерсы Binance
         'adjustForTimeDifference': True
     },
     'urls': {
-        'api': 'https://fapi.binance.com'  # ✅ Основной API Binance Futures
+        'api': {
+            'public': 'https://fapi.binance.com',
+            'private': 'https://fapi.binance.com'
+        }
     }
 })
+
 
 print("📡 Подключение к Binance...")
 
