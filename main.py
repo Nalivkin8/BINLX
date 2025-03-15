@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import websocket
+import requests
 import pandas as pd
 from statistics import mean
 from telegram import Bot, Update, KeyboardButton, ReplyKeyboardMarkup
@@ -11,8 +12,39 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-# 🔹 WebSocket Binance Futures
+# 🔹 Список торговых пар
 TRADE_PAIRS = ["adausdt", "ipusdt", "tstusdt"]
+
+def check_binance_pairs():
+    """🔍 Проверяем, какие пары торгуются на Binance Futures"""
+    print("🔍 Проверяем доступные пары на Binance Futures...")
+    url = "https://fapi.binance.com/fapi/v1/exchangeInfo"
+    try:
+        response = requests.get(url, timeout=5)
+        if response.status_code == 200:
+            data = response.json()
+            valid_pairs = [
+                pair for pair in TRADE_PAIRS 
+                if any(symbol["symbol"].lower() == pair for symbol in data["symbols"])
+            ]
+            if not valid_pairs:
+                print("❌ Нет доступных пар. Проверь Binance Futures.")
+                exit()
+            return valid_pairs
+        else:
+            print(f"⚠️ Ошибка Binance: {response.status_code}")
+            return []
+    except requests.exceptions.RequestException as e:
+        print(f"❌ Ошибка подключения: {e}")
+        return []
+
+# 🔹 Обновляем список пар (убираем несуществующие)
+TRADE_PAIRS = check_binance_pairs()
+if not TRADE_PAIRS:
+    print("❌ Нет доступных пар. Проверь Binance Futures.")
+    exit()
+
+# 🔹 WebSocket Binance Futures
 STREAMS = [f"{pair}@kline_5m" for pair in TRADE_PAIRS]
 BINANCE_WS_URL = f"wss://fstream.binance.com/stream?streams=" + "/".join(STREAMS)
 
@@ -54,7 +86,6 @@ def on_message(ws, message):
         event_type = stream.split("@")[1]
 
         if event_type.startswith("kline"):
-            # 📊 Обработка свечей (Kline)
             price = float(data["data"]["k"]["c"])
             timestamp = data["data"]["k"]["t"]
             is_closed = data["data"]["k"]["x"]
@@ -84,14 +115,13 @@ def on_message(ws, message):
                     if rsi < 30 and sma_50 > sma_200:
                         take_profit = round(price + risk_factor, 6)
                         stop_loss = round(price - (risk_factor / 2), 6)
-                        signal = f"🚀 **Лонг {pair}**\n💰 Цена: {price}\n🎯 Тейк-Профит: {take_profit}\n🛑 Стоп-Лосс: {stop_loss}\n📊 RSI: {rsi:.2f} | SMA-50 > SMA-200"
+                        signal = f"🚀 **Лонг {pair}**\n💰 Цена: {price}\n🎯 TP: {take_profit}\n🛑 SL: {stop_loss}\n📊 RSI: {rsi:.2f} | SMA-50 > SMA-200"
 
                     elif rsi > 70 and sma_50 < sma_200:
                         take_profit = round(price - risk_factor, 6)
                         stop_loss = round(price + (risk_factor / 2), 6)
-                        signal = f"⚠️ **Шорт {pair}**\n💰 Цена: {price}\n🎯 Тейк-Профит: {take_profit}\n🛑 Стоп-Лосс: {stop_loss}\n📊 RSI: {rsi:.2f} | SMA-50 < SMA-200"
+                        signal = f"⚠️ **Шорт {pair}**\n💰 Цена: {price}\n🎯 TP: {take_profit}\n🛑 SL: {stop_loss}\n📊 RSI: {rsi:.2f} | SMA-50 < SMA-200"
 
-                # Проверка, был ли такой же сигнал ранее
                 if signal and last_signal[pair] != signal:
                     last_signal[pair] = signal  # Запоминаем последний сигнал
                     asyncio.run(send_telegram_message(signal))
@@ -100,32 +130,6 @@ def start_websocket():
     """🔹 Запуск WebSocket"""
     ws = websocket.WebSocketApp(BINANCE_WS_URL, on_message=on_message)
     ws.run_forever()
-
-async def start(update: Update, context):
-    keyboard = [
-        [KeyboardButton("📊 Баланс"), KeyboardButton("📋 Ордера")],
-        [KeyboardButton("📈 Позиции"), KeyboardButton("📢 Сигналы")],
-    ]
-    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
-    await update.message.reply_text("✅ Бот запущен! Выберите действие:", reply_markup=reply_markup)
-
-async def handle_message(update: Update, context):
-    text = update.message.text
-
-    if text == "📊 Баланс":
-        await update.message.reply_text("✅ Баланс обновляется в реальном времени!")
-
-    elif text == "📋 Ордера":
-        await update.message.reply_text("✅ Бот отслеживает ордера!")
-
-    elif text == "📈 Позиции":
-        await update.message.reply_text("✅ Бот следит за позициями!")
-
-    elif text == "📢 Сигналы":
-        await update.message.reply_text("✅ Бот отправляет торговые сигналы!")
-
-    else:
-        await update.message.reply_text("❌ Команда не распознана")
 
 async def run_telegram_bot():
     """🔹 Запуск Telegram-бота"""
