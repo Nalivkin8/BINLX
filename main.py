@@ -19,79 +19,61 @@ BINANCE_SECRET_KEY = os.getenv("BINANCE_SECRET_KEY")
 # 🔹 Binance API URL
 BINANCE_FUTURES_URL = "https://fapi.binance.com"
 
-# 🔹 Временной сдвиг (будет обновляться при запуске)
-SERVER_TIME_OFFSET = 0
-
 # 🔹 Поддерживаемые пары
 TRADE_PAIRS = ["ADAUSDT", "IPUSDT", "TSTUSDT"]
 
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
 
-def get_binance_time():
-    """🔹 Получение серверного времени Binance"""
-    global SERVER_TIME_OFFSET
-    url = f"{BINANCE_FUTURES_URL}/fapi/v1/time"
-    
-    try:
-        response = requests.get(url)
-        server_time = response.json()["serverTime"]
-        local_time = int(time.time() * 1000)
-        SERVER_TIME_OFFSET = server_time - local_time
-        print(f"✅ Время синхронизировано! Смещение: {SERVER_TIME_OFFSET} мс")
-    except Exception as e:
-        print(f"❌ Ошибка получения времени Binance: {e}")
-
 def sign_request(params):
     """🔹 Создаёт подпись для Binance API"""
-    params["timestamp"] = int(time.time() * 1000) + SERVER_TIME_OFFSET
+    params["timestamp"] = int(time.time() * 1000)
     query_string = urlencode(params)
     signature = hmac.new(BINANCE_SECRET_KEY.encode(), query_string.encode(), hashlib.sha256).hexdigest()
     params["signature"] = signature
     return params
 
-async def get_exchange_info():
-    """🔹 Получение информации о бирже (список пар, лимиты)"""
-    url = f"{BINANCE_FUTURES_URL}/fapi/v1/exchangeInfo"
-    
+async def get_order_book(symbol):
+    """🔹 Запрос стакана ордеров"""
+    url = f"{BINANCE_FUTURES_URL}/fapi/v1/depth"
+    params = {"symbol": symbol.upper(), "limit": 10}  # Получаем 10 лучших заявок
+
     try:
-        response = requests.get(url)
+        response = requests.get(url, params=params)
         data = response.json()
+        bids = data["bids"][:5]  # 5 лучших заявок на покупку
+        asks = data["asks"][:5]  # 5 лучших заявок на продажу
 
-        available_pairs = {s["symbol"]: s for s in data["symbols"]}
+        order_book = f"📊 **Order Book {symbol.upper()}**\n\n"
+        order_book += "🔹 **Покупатели (BIDS):**\n"
+        for bid in bids:
+            order_book += f"💚 {bid[0]} | Кол-во: {bid[1]}\n"
+        
+        order_book += "\n🔻 **Продавцы (ASKS):**\n"
+        for ask in asks:
+            order_book += f"❤️ {ask[0]} | Кол-во: {ask[1]}\n"
 
-        report = "📊 **Информация о доступных торговых парах**:\n"
-        for pair in TRADE_PAIRS:
-            if pair in available_pairs:
-                symbol_info = available_pairs[pair]
-                min_qty = symbol_info["filters"][1]["minQty"]
-                tick_size = symbol_info["filters"][0]["tickSize"]
-                max_leverage = symbol_info["filters"][6]["maxLeverage"]
-
-                report += f"\n🔹 **{pair}**:\n"
-                report += f"📏 Минимальный ордер: {min_qty}\n"
-                report += f"💰 Шаг цены: {tick_size}\n"
-                report += f"⚡ Максимальное плечо: {max_leverage}x\n"
-            else:
-                report += f"\n❌ {pair} **недоступна на Binance Futures**\n"
-
-        return report
+        return order_book
     except Exception as e:
-        return f"❌ Ошибка получения информации о бирже: {e}"
+        return f"❌ Ошибка запроса стакана ордеров: {e}"
 
 async def start(update: Update, context):
     keyboard = [
-        [KeyboardButton("📊 Инфо о парах"), KeyboardButton("📈 Баланс")],
+        [KeyboardButton("📊 Order Book ADA"), KeyboardButton("📊 Order Book IP")],
+        [KeyboardButton("📊 Order Book TST")],
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
     await update.message.reply_text("✅ Бот запущен! Выберите действие:", reply_markup=reply_markup)
 
 async def handle_message(update: Update, context):
     text = update.message.text
-    if text == "📊 Инфо о парах":
-        result = await get_exchange_info()
+    if text == "📊 Order Book ADA":
+        result = await get_order_book("ADAUSDT")
         await update.message.reply_text(result)
-    elif text == "📈 Баланс":
-        result = "⚠️ Функция баланса временно недоступна"
+    elif text == "📊 Order Book IP":
+        result = await get_order_book("IPUSDT")
+        await update.message.reply_text(result)
+    elif text == "📊 Order Book TST":
+        result = await get_order_book("TSTUSDT")
         await update.message.reply_text(result)
     else:
         await update.message.reply_text("❌ Команда не распознана")
@@ -105,8 +87,7 @@ async def run_telegram_bot():
     await application.run_polling()
 
 async def main():
-    """🔹 Запуск Telegram-бота и проверка информации о бирже"""
-    get_binance_time()  # Синхронизация времени Binance
+    """🔹 Запуск Telegram-бота и Order Book"""
     await run_telegram_bot()
 
 if __name__ == "__main__":
