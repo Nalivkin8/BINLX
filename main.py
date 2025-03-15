@@ -12,31 +12,41 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 # Торговые пары
 TRADE_PAIRS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT"]
 
-# Подключение к Binance
+# Проверяем, есть ли API-ключ
+if not BINANCE_API_KEY:
+    raise Exception("❌ Binance API-ключ отсутствует! Проверь API в Railway Variables.")
+
+# Подключение к Binance Futures API
 exchange = ccxt.binance({
     'apiKey': BINANCE_API_KEY,
     'enableRateLimit': True,
     'options': {
-        'defaultType': 'future',  # Используем фьючерсы
+        'defaultType': 'future',  # Переключаем на фьючерсы
         'adjustForTimeDifference': True
     },
     'urls': {
-        'api': 'https://api1.binance.com'  # Альтернативный сервер
+        'api': {
+            'public': 'https://fapi.binance.com',  # Binance Futures API (фьючерсы)
+            'private': 'https://fapi.binance.com'
+        }
     }
 })
 
-
-
-
 # Получение данных рынка
 def get_market_data(symbol, timeframe="15m"):
-    candles = exchange.fetch_ohlcv(symbol, timeframe, limit=50)
-    df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-    df['close'] = df['close'].astype(float)
-    return df
+    try:
+        candles = exchange.fetch_ohlcv(symbol, timeframe, limit=50)
+        df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        df['close'] = df['close'].astype(float)
+        return df
+    except Exception as e:
+        print(f"Ошибка при получении данных для {symbol}: {str(e)}")
+        return None
 
 # Расчет RSI
 def calculate_rsi(df, period=14):
+    if df is None:
+        return None
     delta = df['close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
@@ -46,15 +56,23 @@ def calculate_rsi(df, period=14):
 
 # Функция отправки сигнала
 def send_signal(message):
-    bot = Bot(token=TELEGRAM_BOT_TOKEN)
-    bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message)
+    try:
+        bot = Bot(token=TELEGRAM_BOT_TOKEN)
+        bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message)
+    except Exception as e:
+        print(f"Ошибка при отправке сообщения в Telegram: {str(e)}")
 
 # Основной цикл
 def monitor_market():
     while True:
         for pair in TRADE_PAIRS:
             df = get_market_data(pair)
+            if df is None:
+                continue  # Пропускаем, если данных нет
+
             rsi = calculate_rsi(df)
+            if rsi is None:
+                continue
 
             last_price = df['close'].iloc[-1]
             message = ""
