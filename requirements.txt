@@ -3,3 +3,4 @@ numpy
 pandas
 python-telegram-bot
 matplotlib
+schedule
