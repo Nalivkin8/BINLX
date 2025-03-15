@@ -11,13 +11,14 @@ print("🚀 Запуск бота...")
 load_dotenv()
 
 # Получаем API-ключи из переменных Railway
+# Загружаем API-ключи из Railway
 BINANCE_API_KEY = os.getenv("BINANCE_API_KEY")
+BINANCE_SECRET_KEY = os.getenv("BINANCE_SECRET_KEY")  # ✅ Добавили эту строку
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-print("🔍 Проверка API-ключей...")
-if not BINANCE_API_KEY or not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-    raise Exception("❌ Ошибка: API-ключи не загружены! Проверь .env файл или переменные Railway.")
+if not BINANCE_API_KEY or not BINANCE_SECRET_KEY:
+    raise Exception("❌ Ошибка: API-ключи Binance не загружены! Проверь переменные в Railway.")
 
 print("✅ API-ключи загружены!")
 
