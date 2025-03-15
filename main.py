@@ -47,8 +47,8 @@ async def get_order_book(symbol):
     try:
         response = requests.get(url, params=params)
         data = response.json()
-        bids = data["bids"][:5]  # 5 лучших заявок на покупку
-        asks = data["asks"][:5]  # 5 лучших заявок на продажу
+        bids = data["bids"][:5]
+        asks = data["asks"][:5]
 
         order_book = f"📊 Order Book {symbol.upper()}:\n\n"
         order_book += "🔹 **Покупатели (Bids):**\n"
@@ -133,7 +133,7 @@ def on_message(ws, message):
             if len(candle_data[pair]) > 50:
                 candle_data[pair].pop(0)
 
-async def start_websocket():
+def start_websocket():
     """Запуск WebSocket"""
     ws = websocket.WebSocketApp(BINANCE_WS_URL, on_message=on_message)
     ws.run_forever()
@@ -142,11 +142,11 @@ async def main():
     """Запуск бота и WebSocket в одном event loop"""
     loop = asyncio.get_running_loop()
     
-    # Запускаем Telegram-бота и WebSocket в параллельных задачах
-    telegram_task = loop.create_task(run_telegram_bot())
+    # Telegram-бот и WebSocket работают параллельно
+    telegram_task = asyncio.create_task(run_telegram_bot())
     websocket_task = loop.run_in_executor(None, start_websocket)
 
     await asyncio.gather(telegram_task, websocket_task)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(main(), debug=True)
