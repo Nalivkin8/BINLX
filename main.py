@@ -6,7 +6,8 @@ import numpy as np
 import os
 import schedule
 import time
-from telegram import Bot
+from telegram import Bot, Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, CallbackContext
 import ccxt  
 
 # 🔹 Загружаем API-ключи из Railway Variables
@@ -45,19 +46,81 @@ async def send_telegram_message(text):
 # 🔹 Запуск бота (отправляем сообщение в Telegram)
 asyncio.run(send_telegram_message("🚀 Бот запущен и работает!"))
 
+# 🔹 Telegram-обработчик команд
+def start(update: Update, context: CallbackContext):
+    keyboard = [
+        [InlineKeyboardButton("📊 Баланс", callback_data="balance")],
+        [InlineKeyboardButton("📈 Открытые сделки", callback_data="positions")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    update.message.reply_text("Выберите действие:", reply_markup=reply_markup)
+
+# 🔹 Запрос баланса
+def get_balance():
+    try:
+        balance_info = exchange.fetch_balance()
+        balance = balance_info['total']['USDT'] if 'USDT' in balance_info['total'] else 0
+        return round(balance, 2)
+    except Exception as e:
+        print(f"❌ Ошибка получения баланса: {e}")
+        return 0
+
+def show_balance(update: Update, context: CallbackContext):
+    balance = get_balance()
+    update.callback_query.answer()
+    update.callback_query.message.reply_text(f"💰 Ваш баланс: {balance} USDT")
+
+# 🔹 Запрос активных позиций
+def get_open_positions():
+    try:
+        positions = exchange.fetch_positions()
+        open_positions = [p for p in positions if float(p['contracts']) > 0]
+
+        if not open_positions:
+            return "📌 Нет открытых позиций"
+
+        report = "📊 Открытые позиции:\n"
+        for pos in open_positions:
+            report += f"🔹 {pos['symbol']}: {pos['side']} {pos['contracts']} контрактов\nPnL: {round(float(pos['unrealizedPnl']), 2)} USDT\n\n"
+
+        return report
+    except Exception as e:
+        print(f"❌ Ошибка получения позиций: {e}")
+        return "❌ Ошибка при получении позиций"
+
+def show_positions(update: Update, context: CallbackContext):
+    positions = get_open_positions()
+    update.callback_query.answer()
+    update.callback_query.message.reply_text(positions)
+
+# 🔹 Обработчик кнопок
+def button_click(update: Update, context: CallbackContext):
+    query = update.callback_query
+    if query.data == "balance":
+        show_balance(update, context)
+    elif query.data == "positions":
+        show_positions(update, context)
+
+# 🔹 Настройка Telegram-хендлеров
+updater = Updater(TELEGRAM_BOT_TOKEN, use_context=True)
+dp = updater.dispatcher
+dp.add_handler(CommandHandler("start", start))
+dp.add_handler(CallbackQueryHandler(button_click))
+
+# 🔹 Запуск Telegram-бота в потоке
+def run_telegram_bot():
+    print("✅ Запуск Telegram-бота...")
+    updater.start_polling()
+    updater.idle()
+
+threading.Thread(target=run_telegram_bot, daemon=True).start()
+
 # 🔹 Торговые пары
 TRADE_PAIRS = ["btcusdt", "ethusdt", "solusdt", "xrpusdt", "adausdt", "dotusdt", "maticusdt", "bnbusdt", "linkusdt", "ipusdt", "tstusdt"]
-
-# 🔹 Данные для анализа
-candle_data = {pair: [] for pair in TRADE_PAIRS}
 
 # 🔹 Объединённое WebSocket-соединение для всех пар
 STREAMS = "/".join([f"{pair}@kline_15m" for pair in TRADE_PAIRS])
 BINANCE_WS_URL = f"wss://fstream.binance.com/stream?streams={STREAMS}"
-
-# 🔹 Логирование сделок
-daily_trades = 0
-total_profit_loss = 0
 
 # 🔹 WebSocket обработчики
 def on_open(ws):
@@ -73,7 +136,6 @@ def on_error(ws, error):
 
 # 🔹 Обработка входящих данных WebSocket
 def on_message(ws, message):
-    global daily_trades, total_profit_loss
     data = json.loads(message)
     
     if "stream" in data and "data" in data:
@@ -85,61 +147,7 @@ def on_message(ws, message):
 
         print(f"📊 Данные получены для {pair} | Цена: {price}")
 
-        if is_closed:
-            candle_data[pair].append(price)
-
-            if len(candle_data[pair]) > 50:
-                candle_data[pair].pop(0)
-
-            # 📈 RSI
-            rsi = calculate_rsi(candle_data[pair])
-            
-            if rsi is None:
-                return
-
-            print(f"📊 {pair} RSI: {rsi}")
-
-            # 🔹 Отправка сообщений в Telegram при нужных условиях
-            if rsi < 30:
-                message = f"🚀 Лонг {pair}!\nЦена: {price}\nRSI: {rsi}"
-                asyncio.run(send_telegram_message(message))
-            elif rsi > 70:
-                message = f"⚠️ Шорт {pair}!\nЦена: {price}\nRSI: {rsi}"
-                asyncio.run(send_telegram_message(message))
-
-# 🔹 Функция расчёта RSI
-def calculate_rsi(prices, period=14):
-    if len(prices) < period:
-        return None
-    delta = np.diff(prices)
-    gain = np.where(delta > 0, delta, 0)
-    loss = np.where(delta < 0, -delta, 0)
-    avg_gain = np.mean(gain[-period:])
-    avg_loss = np.mean(loss[-period:])
-    rs = avg_gain / avg_loss if avg_loss != 0 else 0
-    rsi = 100 - (100 / (1 + rs))
-    return round(rsi, 2)
-
-# 🔹 Получение баланса аккаунта
-def get_balance():
-    try:
-        balance_info = exchange.fetch_balance()
-        balance = balance_info['total']['USDT'] if 'USDT' in balance_info['total'] else 0
-        return round(balance, 2)
-    except Exception as e:
-        print(f"❌ Ошибка получения баланса: {e}")
-        return 0
-
-# 🔹 Дневной отчёт в Telegram
-def daily_report():
-    balance = get_balance()
-    report = f"📊 Дневной отчёт\n🔹 Баланс: {balance} USDT\n🔹 Сделок за сутки: {daily_trades}\n🔹 Общий P/L: {round(total_profit_loss, 2)} USDT"
-    asyncio.run(send_telegram_message(report))
-    print("✅ Дневной отчёт отправлен!")
-
-schedule.every().day.at("00:00").do(daily_report)
-
-# 🔹 Запуск WebSocket
+# 🔹 Запуск WebSocket в отдельном потоке
 def start_websocket():
     ws = websocket.WebSocketApp(
         BINANCE_WS_URL,
@@ -150,5 +158,4 @@ def start_websocket():
     )
     ws.run_forever()
 
-# Запуск WebSocket в отдельном потоке
-threading.Thread(target=start_websocket).start()
+threading.Thread(target=start_websocket, daemon=True).start()
