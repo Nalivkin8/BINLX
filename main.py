@@ -20,14 +20,30 @@ BINANCE_WS_URL = f"wss://fstream.binance.com/stream?streams=" + "/".join(STREAMS
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
 candle_data = {pair: pd.DataFrame(columns=["timestamp", "close", "volume"]) for pair in TRADE_PAIRS}
 last_signal = {pair: None for pair in TRADE_PAIRS}  # Запоминаем последний сигнал
-scalping_mode = True  # Включен режим скальпинга
 
 async def send_telegram_message(text):
     """🔹 Отправка сообщений в Telegram"""
     print(f"📨 Telegram: {text}")
     await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=text)
 
-def calculate_rsi(df, period=14):
+def log_event(event):
+    """🔹 Логирование событий"""
+    print(f"📝 {datetime.now().strftime('%H:%M:%S')} | {event}")
+
+def on_open(ws):
+    """🔹 Подключение к WebSocket"""
+    log_event("✅ WebSocket подключен")
+
+def on_error(ws, error):
+    """🔹 Ошибка WebSocket"""
+    log_event(f"❌ Ошибка WebSocket: {error}")
+
+def on_close(ws, close_status_code, close_msg):
+    """🔹 Закрытие WebSocket"""
+    log_event("⚠️ WebSocket отключен, переподключение...")
+    start_websocket()  # Переподключение
+
+def calculate_rsi(df, period=5):
     """🔹 Рассчет RSI"""
     delta = df["close"].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
@@ -37,7 +53,7 @@ def calculate_rsi(df, period=14):
     return rsi.iloc[-1] if not rsi.empty else None
 
 def calculate_vwap(df):
-    """🔹 Рассчет VWAP (Volume Weighted Average Price)"""
+    """🔹 Рассчет VWAP"""
     typical_price = (df["close"] + df["close"].shift(1)) / 2
     vwap = (typical_price * df["volume"]).cumsum() / df["volume"].cumsum()
     return vwap.iloc[-1] if not vwap.empty else None
@@ -46,7 +62,7 @@ def calculate_sma(df, period=10):
     """🔹 Рассчет SMA"""
     return df["close"].rolling(window=period).mean().iloc[-1] if not df.empty else None
 
-def calculate_volatility(df, period=10):
+def calculate_volatility(df, period=5):
     """🔹 Рассчет волатильности"""
     if len(df) < period:
         return None
@@ -62,7 +78,6 @@ def on_message(ws, message):
         event_type = stream.split("@")[1]
 
         if event_type.startswith("kline"):
-            # 📊 Обработка свечей (Kline)
             price = float(data["data"]["k"]["c"])
             timestamp = data["data"]["k"]["t"]
             volume = float(data["data"]["k"]["v"])
@@ -76,19 +91,17 @@ def on_message(ws, message):
                 if len(candle_data[pair]) > 50:
                     candle_data[pair] = candle_data[pair].iloc[-50:]
 
-                # Рассчитываем индикаторы
-                rsi = calculate_rsi(candle_data[pair], period=5)
-                sma_10 = calculate_sma(candle_data[pair], period=10)
+                rsi = calculate_rsi(candle_data[pair])
+                sma_10 = calculate_sma(candle_data[pair])
                 vwap = calculate_vwap(candle_data[pair])
-                volatility = calculate_volatility(candle_data[pair], period=5)
+                volatility = calculate_volatility(candle_data[pair])
 
-                # Условия для скальпинга
                 signal = ""
                 take_profit = None
                 stop_loss = None
 
                 if rsi and sma_10 and vwap and volatility:
-                    risk_factor = round(volatility * 5, 6)  # Увеличиваем TP при высокой волатильности
+                    risk_factor = round(volatility * 5, 6)
                     timestamp_str = datetime.utcfromtimestamp(timestamp // 1000).strftime('%H:%M:%S')
 
                     if rsi < 30 and price > vwap:
@@ -101,14 +114,20 @@ def on_message(ws, message):
                         stop_loss = round(price + (risk_factor / 2), 6)
                         signal = f"⚠️ **Шорт {pair}**\n⏰ {timestamp_str}\n💰 Цена: {price}\n🎯 TP: {take_profit}\n🛑 SL: {stop_loss}\n📊 RSI: {rsi:.2f} | VWAP: {vwap:.6f} | SMA-10: {sma_10:.6f}"
 
-                # Проверка на дубли сигналов
                 if signal and last_signal[pair] != signal:
                     last_signal[pair] = signal
                     asyncio.run(send_telegram_message(signal))
 
 def start_websocket():
     """🔹 Запуск WebSocket"""
-    ws = websocket.WebSocketApp(BINANCE_WS_URL, on_message=on_message)
+    log_event("🔄 Подключение к Binance WebSocket...")
+    ws = websocket.WebSocketApp(
+        BINANCE_WS_URL,
+        on_message=on_message,
+        on_error=on_error,
+        on_close=on_close,
+        on_open=on_open
+    )
     ws.run_forever()
 
 async def main():
@@ -118,4 +137,5 @@ async def main():
     await asyncio.gather(websocket_task)
 
 if __name__ == "__main__":
+    log_event("🚀 Запуск бота...")
     asyncio.run(main(), debug=True)
