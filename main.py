@@ -3,18 +3,19 @@ import json
 import os
 import websocket
 import pandas as pd
-import numpy as np
-from statistics import mean
 from telegram import Bot
 from datetime import datetime
+from statistics import mean
 
 # 🔹 API-ключи
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-# 🔹 WebSocket Binance Futures
+# 🔹 Подключаем пары для сигналов
 TRADE_PAIRS = ["adausdt", "ipusdt", "tstusdt"]
-STREAMS = [f"{pair}@kline_1m" for pair in TRADE_PAIRS]  # 1-минутные свечи для скальпинга
+
+# 🔹 Binance WebSocket для 1-минутных свечей (скальпинг)
+STREAMS = [f"{pair}@kline_1m" for pair in TRADE_PAIRS]
 BINANCE_WS_URL = f"wss://fstream.binance.com/stream?streams=" + "/".join(STREAMS)
 
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
