@@ -12,13 +12,36 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-# 🔹 Список торговых пар
+# 🔹 Список торговых пар (оставляем все пары, как было)
 TRADE_PAIRS = ["adausdt", "ipusdt", "tstusdt"]
+
+# 🔹 Альтернативные API-серверы Binance
+BINANCE_API_URLS = [
+    "https://fapi.binance.com",
+    "https://fapi1.binance.com",
+    "https://fapi2.binance.com",
+    "https://fapi3.binance.com"
+]
+
+def get_available_binance_url():
+    """🔍 Проверяем, какой API-сервер Binance доступен"""
+    for url in BINANCE_API_URLS:
+        try:
+            response = requests.get(f"{url}/fapi/v1/exchangeInfo", timeout=5)
+            if response.status_code == 200:
+                print(f"✅ Используем Binance API: {url}")
+                return url
+        except requests.exceptions.RequestException:
+            continue
+    print("❌ Все Binance API недоступны!")
+    exit()
+
+BINANCE_API_URL = get_available_binance_url()
 
 def check_binance_pairs():
     """🔍 Проверяем, какие пары торгуются на Binance Futures"""
     print("🔍 Проверяем доступные пары на Binance Futures...")
-    url = "https://fapi.binance.com/fapi/v1/exchangeInfo"
+    url = f"{BINANCE_API_URL}/fapi/v1/exchangeInfo"
     try:
         response = requests.get(url, timeout=5)
         if response.status_code == 200:
@@ -27,22 +50,16 @@ def check_binance_pairs():
                 pair for pair in TRADE_PAIRS 
                 if any(symbol["symbol"].lower() == pair for symbol in data["symbols"])
             ]
-            if not valid_pairs:
-                print("❌ Нет доступных пар. Проверь Binance Futures.")
-                exit()
-            return valid_pairs
+            return valid_pairs if valid_pairs else TRADE_PAIRS  # Если пар нет, оставляем как было
         else:
             print(f"⚠️ Ошибка Binance: {response.status_code}")
-            return []
+            return TRADE_PAIRS
     except requests.exceptions.RequestException as e:
         print(f"❌ Ошибка подключения: {e}")
-        return []
+        return TRADE_PAIRS
 
-# 🔹 Обновляем список пар (убираем несуществующие)
+# 🔹 Обновляем список пар (если какие-то не работают — убираем)
 TRADE_PAIRS = check_binance_pairs()
-if not TRADE_PAIRS:
-    print("❌ Нет доступных пар. Проверь Binance Futures.")
-    exit()
 
 # 🔹 WebSocket Binance Futures
 STREAMS = [f"{pair}@kline_5m" for pair in TRADE_PAIRS]
@@ -50,7 +67,7 @@ BINANCE_WS_URL = f"wss://fstream.binance.com/stream?streams=" + "/".join(STREAMS
 
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
 candle_data = {pair: pd.DataFrame(columns=["timestamp", "close"]) for pair in TRADE_PAIRS}
-last_signal = {pair: None for pair in TRADE_PAIRS}  # Запоминаем последний сигнал
+last_signal = {pair: None for pair in TRADE_PAIRS}
 
 async def send_telegram_message(text):
     """🔹 Отправка сообщений в Telegram"""
@@ -71,7 +88,7 @@ def calculate_sma(df, period=50):
     return df["close"].rolling(window=period).mean().iloc[-1] if not df.empty else None
 
 def calculate_volatility(df, period=20):
-    """🔹 Рассчет волатильности (Средний размах свечей)"""
+    """🔹 Рассчет волатильности"""
     if len(df) < period:
         return None
     return mean(df["close"].diff().abs().tail(period))
@@ -123,7 +140,7 @@ def on_message(ws, message):
                         signal = f"⚠️ **Шорт {pair}**\n💰 Цена: {price}\n🎯 TP: {take_profit}\n🛑 SL: {stop_loss}\n📊 RSI: {rsi:.2f} | SMA-50 < SMA-200"
 
                 if signal and last_signal[pair] != signal:
-                    last_signal[pair] = signal  # Запоминаем последний сигнал
+                    last_signal[pair] = signal
                     asyncio.run(send_telegram_message(signal))
 
 def start_websocket():
@@ -131,20 +148,11 @@ def start_websocket():
     ws = websocket.WebSocketApp(BINANCE_WS_URL, on_message=on_message)
     ws.run_forever()
 
-async def run_telegram_bot():
-    """🔹 Запуск Telegram-бота"""
-    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    print("✅ Telegram-бот запущен!")
-    await application.run_polling()
-
 async def main():
     """🔹 Запуск WebSocket и Telegram-бота"""
     loop = asyncio.get_running_loop()
-    telegram_task = asyncio.create_task(run_telegram_bot())
     websocket_task = loop.run_in_executor(None, start_websocket)
-    await asyncio.gather(telegram_task, websocket_task)
+    await websocket_task
 
 if __name__ == "__main__":
     asyncio.run(main(), debug=True)
