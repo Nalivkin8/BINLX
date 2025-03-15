@@ -1,4 +1,4 @@
-ccxt
+websocket-client
+numpy
 pandas
 python-telegram-bot
-python-dotenv
