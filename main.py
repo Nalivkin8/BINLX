@@ -21,16 +21,14 @@ exchange = ccxt.binance({
     'apiKey': BINANCE_API_KEY,
     'enableRateLimit': True,
     'options': {
-        'defaultType': 'future',  # Переключаем на фьючерсы
+        'defaultType': 'future',
         'adjustForTimeDifference': True
     },
     'urls': {
-        'api': {
-            'public': 'https://fapi.binance.com',  # Binance Futures API (фьючерсы)
-            'private': 'https://fapi.binance.com'
-        }
+        'api': 'https://api1.binance.com'  # Альтернативный сервер Binance
     }
 })
+
 
 # Получение данных рынка
 def get_market_data(symbol, timeframe="15m"):
