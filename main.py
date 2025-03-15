@@ -1,12 +1,12 @@
 import json
 import asyncio
-import websockets
 import requests
 import os
 from dotenv import load_dotenv
 from binance.client import Client
 from binance.enums import *
 from telegram import Bot
+import websockets  # Убедимся, что websockets установлен
 
 # Загрузка переменных окружения
 load_dotenv()
@@ -37,7 +37,6 @@ async def binance_websocket(symbol):
                 await asyncio.sleep(5)  # Переподключение через 5 сек
 
 # Обработка полученных данных
-
 def process_message(message):
     kline = message.get("k", {})
     close_price = float(kline.get("c", 0))
