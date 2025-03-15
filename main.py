@@ -87,7 +87,7 @@ async def start(update: Update, context):
         [KeyboardButton("📊 Баланс"), KeyboardButton("📈 Открытые сделки")]
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
-    await update.message.reply_text("Выберите действие:", reply_markup=reply_markup)
+    await update.message.reply_text("✅ Бот запущен! Выберите действие:", reply_markup=reply_markup)
 
 async def handle_message(update: Update, context):
     """Обработчик сообщений"""
@@ -112,7 +112,7 @@ async def run_telegram_bot():
 TRADE_PAIRS = ["adausdt", "ipusdt", "tstusdt"]
 
 # 🔹 WebSocket URL
-STREAMS = "/".join([f"{pair}@kline_15m" for pair in TRADE_PAIRS])
+STREAMS = "/".join([f"{pair}@kline_5m" for pair in TRADE_PAIRS])
 BINANCE_WS_URL = f"wss://fstream.binance.com/stream?streams={STREAMS}"
 
 # 🔹 Данные для анализа
