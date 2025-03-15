@@ -12,9 +12,7 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 # 🔹 WebSocket Binance Futures
 TRADE_PAIRS = ["adausdt", "ipusdt", "tstusdt"]
-STREAMS = [f"{pair}@kline_5m" for pair in TRADE_PAIRS] + \
-          [f"{pair}@trade" for pair in TRADE_PAIRS] + \
-          [f"{pair}@forceOrder" for pair in TRADE_PAIRS]
+STREAMS = [f"{pair}@kline_5m" for pair in TRADE_PAIRS]
 BINANCE_WS_URL = f"wss://fstream.binance.com/stream?streams=" + "/".join(STREAMS)
 
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
@@ -66,32 +64,24 @@ def on_message(ws, message):
                 sma_50 = calculate_sma(candle_data[pair], period=50)
                 sma_200 = calculate_sma(candle_data[pair], period=200)
 
-                # Проверка сигналов
+                # Условия для Лонга/Шорта
                 signal = ""
+                take_profit = None
+                stop_loss = None
+
                 if rsi and sma_50 and sma_200:
                     if rsi < 30 and sma_50 > sma_200:
-                        signal = f"🚀 **Лонг {pair}** | Цена: {price} | RSI: {rsi:.2f}"
+                        take_profit = round(price * 1.02, 6)  # +2%
+                        stop_loss = round(price * 0.98, 6)  # -2%
+                        signal = f"🚀 **Лонг {pair}**\n💰 Цена: {price}\n🎯 Тейк-Профит: {take_profit}\n🛑 Стоп-Лосс: {stop_loss}\n📊 RSI: {rsi:.2f}"
+
                     elif rsi > 70 and sma_50 < sma_200:
-                        signal = f"⚠️ **Шорт {pair}** | Цена: {price} | RSI: {rsi:.2f}"
+                        take_profit = round(price * 0.98, 6)  # -2%
+                        stop_loss = round(price * 1.02, 6)  # +2%
+                        signal = f"⚠️ **Шорт {pair}**\n💰 Цена: {price}\n🎯 Тейк-Профит: {take_profit}\n🛑 Стоп-Лосс: {stop_loss}\n📊 RSI: {rsi:.2f}"
 
                 if signal:
                     asyncio.run(send_telegram_message(signal))
-
-        elif event_type == "trade":
-            # 📈 Обработка сделок (Trade)
-            price = data["data"]["p"]
-            qty = data["data"]["q"]
-            side = "🟢 Покупка" if data["data"]["m"] else "🔴 Продажа"
-            trade_message = f"📈 **Сделка {pair}**\n{side} | Цена: {price} | Объем: {qty}"
-            asyncio.run(send_telegram_message(trade_message))
-
-        elif event_type == "forceOrder":
-            # 🔥 Обработка ликвидаций (Force Order)
-            price = data["data"]["o"]["p"]
-            qty = data["data"]["o"]["q"]
-            side = "🟢 Ликвидация Лонга" if data["data"]["o"]["S"] == "BUY" else "🔴 Ликвидация Шорта"
-            liquidation_message = f"🔥 **Ликвидация {pair}**\n{side} | Цена: {price} | Объем: {qty}"
-            asyncio.run(send_telegram_message(liquidation_message))
 
 def start_websocket():
     """🔹 Запуск WebSocket"""
