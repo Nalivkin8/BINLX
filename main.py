@@ -19,11 +19,9 @@ exchange = ccxt.binance({
     'options': {
         'defaultType': 'spot',
         'adjustForTimeDifference': True
-    },
-    'urls': {
-        'api': 'https://api1.binance.com'
     }
 })
+
 
 
 # Получение данных рынка
