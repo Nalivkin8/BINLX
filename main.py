@@ -1,9 +1,8 @@
 import asyncio
+import threading
 import websocket
 import json
 import numpy as np
-import matplotlib.pyplot as plt
-import io
 import os
 import schedule
 import time
@@ -51,10 +50,10 @@ TRADE_PAIRS = ["btcusdt", "ethusdt", "solusdt", "xrpusdt", "adausdt", "dotusdt",
 
 # 🔹 Данные для анализа
 candle_data = {pair: [] for pair in TRADE_PAIRS}
-candle_volumes = {pair: [] for pair in TRADE_PAIRS}
 
-# 🔹 WebSocket URL (правильный формат)
-SOCKETS = {pair: f"wss://fstream.binance.com/ws/{pair}@kline_15m" for pair in TRADE_PAIRS}
+# 🔹 Объединённое WebSocket-соединение для всех пар
+STREAMS = "/".join([f"{pair}@kline_15m" for pair in TRADE_PAIRS])
+BINANCE_WS_URL = f"wss://fstream.binance.com/stream?streams={STREAMS}"
 
 # 🔹 Логирование сделок
 daily_trades = 0
@@ -73,41 +72,40 @@ def on_error(ws, error):
     print(f"⚠️ Ошибка WebSocket: {error}")
 
 # 🔹 Обработка входящих данных WebSocket
-def on_message(ws, message, pair):
+def on_message(ws, message):
     global daily_trades, total_profit_loss
     data = json.loads(message)
-    candle = data['k']
-    price = float(candle['c'])  
-    volume = float(candle['v'])
-    is_closed = candle['x']
+    
+    if "stream" in data and "data" in data:
+        stream = data["stream"]
+        pair = stream.split("@")[0].upper()
+        kline = data["data"]["k"]
+        price = float(kline["c"])
+        is_closed = kline["x"]
 
-    print(f"📊 Данные получены для {pair.upper()} | Цена: {price} | Объём: {volume}")
+        print(f"📊 Данные получены для {pair} | Цена: {price}")
 
-    if is_closed:
-        candle_data[pair].append(price)
-        candle_volumes[pair].append(volume)
+        if is_closed:
+            candle_data[pair].append(price)
 
-        if len(candle_data[pair]) > 50:
-            candle_data[pair].pop(0)
-            candle_volumes[pair].pop(0)
+            if len(candle_data[pair]) > 50:
+                candle_data[pair].pop(0)
 
-        # 📈 RSI
-        rsi = calculate_rsi(candle_data[pair])
-        
-        # 🔹 Фильтр ложных сигналов (если RSI нет - выходим)
-        if rsi is None:
-            return
+            # 📈 RSI
+            rsi = calculate_rsi(candle_data[pair])
+            
+            if rsi is None:
+                return
 
-        # 🔹 Логирование
-        print(f"📊 {pair.upper()} RSI: {rsi}")
+            print(f"📊 {pair} RSI: {rsi}")
 
-        # 🔹 Отправка сообщений в Telegram при нужных условиях
-        if rsi < 30:
-            message = f"🚀 Лонг {pair.upper()}!\nЦена: {price}\nRSI: {rsi}"
-            asyncio.run(send_telegram_message(message))
-        elif rsi > 70:
-            message = f"⚠️ Шорт {pair.upper()}!\nЦена: {price}\nRSI: {rsi}"
-            asyncio.run(send_telegram_message(message))
+            # 🔹 Отправка сообщений в Telegram при нужных условиях
+            if rsi < 30:
+                message = f"🚀 Лонг {pair}!\nЦена: {price}\nRSI: {rsi}"
+                asyncio.run(send_telegram_message(message))
+            elif rsi > 70:
+                message = f"⚠️ Шорт {pair}!\nЦена: {price}\nRSI: {rsi}"
+                asyncio.run(send_telegram_message(message))
 
 # 🔹 Функция расчёта RSI
 def calculate_rsi(prices, period=14):
@@ -141,14 +139,16 @@ def daily_report():
 
 schedule.every().day.at("00:00").do(daily_report)
 
-# 🔹 Запуск WebSocket с логированием
-for pair in TRADE_PAIRS:
-    print(f"✅ Запуск WebSocket для {pair.upper()}...")
+# 🔹 Запуск WebSocket
+def start_websocket():
     ws = websocket.WebSocketApp(
-        SOCKETS[pair],
+        BINANCE_WS_URL,
         on_open=on_open,
         on_close=on_close,
         on_error=on_error,
-        on_message=lambda ws, msg: on_message(ws, msg, pair)
+        on_message=on_message
     )
     ws.run_forever()
+
+# Запуск WebSocket в отдельном потоке
+threading.Thread(target=start_websocket).start()
