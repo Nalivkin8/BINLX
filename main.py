@@ -1,9 +1,14 @@
 import asyncio
-import websocket
+import requests
 import json
-import numpy as np
 import os
-import ccxt  
+import hmac
+import hashlib
+import time
+import ccxt
+import numpy as np
+import websocket
+from urllib.parse import urlencode
 from telegram import Bot, Update, KeyboardButton, ReplyKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
 
@@ -13,86 +18,83 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 BINANCE_API_KEY = os.getenv("BINANCE_API_KEY")
 BINANCE_SECRET_KEY = os.getenv("BINANCE_SECRET_KEY")
 
-# 🔹 Проверка API
-if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-    print("❌ Ошибка: TELEGRAM_BOT_TOKEN или TELEGRAM_CHAT_ID не заданы!")
-    exit()
-if not BINANCE_API_KEY or not BINANCE_SECRET_KEY:
-    print("❌ Ошибка: BINANCE API-ключи не заданы!")
-    exit()
+# 🔹 Binance API URL
+BINANCE_FUTURES_URL = "https://fapi.binance.com"
 
 # 🔹 Подключение к Binance
-try:
-    exchange = ccxt.binance({
-        'apiKey': BINANCE_API_KEY,
-        'secret': BINANCE_SECRET_KEY,
-        'options': {'defaultType': 'future'}
-    })
-    print("✅ Подключение к Binance API успешно!")
-except Exception as e:
-    print(f"❌ Ошибка подключения к Binance: {e}")
-    exit()
+exchange = ccxt.binance({
+    'apiKey': BINANCE_API_KEY,
+    'secret': BINANCE_SECRET_KEY,
+    'options': {'defaultType': 'future'}
+})
 
-# 🔹 Telegram-бот
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
 
+def sign_request(params):
+    """Создаёт подпись для Binance API"""
+    query_string = urlencode(params)
+    signature = hmac.new(BINANCE_SECRET_KEY.encode(), query_string.encode(), hashlib.sha256).hexdigest()
+    params["signature"] = signature
+    return params
+
 async def send_telegram_message(text):
-    """Функция отправки сообщений в Telegram"""
-    print(f"📨 Отправка в Telegram: {text}")
+    """Отправка сообщений в Telegram"""
+    print(f"📨 Telegram: {text}")
     await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=text)
 
-# 🔹 Отправляем сообщение 1 раз (без спама)
-async def startup_message():
-    await send_telegram_message("🚀 Бот запущен и отслеживает рынок!")
-
 async def get_balance():
-    """Запрос баланса"""
+    """Запрос баланса и PnL"""
+    url = f"{BINANCE_FUTURES_URL}/fapi/v2/account"
+    headers = {"X-MBX-APIKEY": BINANCE_API_KEY}
+    params = sign_request({"timestamp": int(time.time() * 1000)})
+
     try:
-        balance_info = exchange.fetch_balance()
-        balance = balance_info['total'].get('USDT', 0)
-        return round(balance, 2)
+        response = requests.get(url, headers=headers, params=params)
+        data = response.json()
+        balance = float(data["totalWalletBalance"])
+        unrealized_pnl = float(data["totalUnrealizedProfit"])
+        return balance, unrealized_pnl
     except Exception as e:
         print(f"❌ Ошибка получения баланса: {e}")
-        return 0
+        return 0, 0
 
 async def show_balance(update: Update, context):
-    """Обработчик кнопки Баланс"""
-    balance = await get_balance()
-    await update.message.reply_text(f"💰 Баланс: {balance} USDT")
+    balance, pnl = await get_balance()
+    await update.message.reply_text(f"💰 Баланс: {balance} USDT\n📈 PnL: {pnl} USDT")
 
 async def get_open_positions():
     """Запрос активных позиций"""
+    url = f"{BINANCE_FUTURES_URL}/fapi/v2/positionRisk"
+    headers = {"X-MBX-APIKEY": BINANCE_API_KEY}
+    params = sign_request({"timestamp": int(time.time() * 1000)})
+
     try:
-        positions = exchange.fetch_positions()
-        open_positions = [p for p in positions if float(p['contracts']) > 0]
+        response = requests.get(url, headers=headers, params=params)
+        positions = response.json()
+        open_positions = [p for p in positions if float(p['positionAmt']) != 0]
+
         if not open_positions:
             return "📌 Нет открытых позиций"
 
         report = "📊 Открытые сделки:\n"
         for pos in open_positions:
-            report += f"🔹 {pos['symbol']}: {pos['side']} {pos['contracts']} контрактов\nPnL: {round(float(pos['unrealizedPnl']), 2)} USDT\n\n"
+            report += f"🔹 {pos['symbol']}: {pos['positionAmt']} контрактов\nPnL: {round(float(pos['unRealizedProfit']), 2)} USDT\n\n"
         return report
     except Exception as e:
         print(f"❌ Ошибка получения позиций: {e}")
         return "❌ Ошибка при получении позиций"
 
 async def show_positions(update: Update, context):
-    """Обработчик кнопки Открытые сделки"""
     positions = await get_open_positions()
     await update.message.reply_text(positions)
 
 async def start(update: Update, context):
-    """Команда /start - Показывает меню внизу"""
-    keyboard = [
-        [KeyboardButton("📊 Баланс"), KeyboardButton("📈 Открытые сделки")]
-    ]
+    keyboard = [[KeyboardButton("📊 Баланс"), KeyboardButton("📈 Открытые сделки")]]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
     await update.message.reply_text("✅ Бот запущен! Выберите действие:", reply_markup=reply_markup)
 
 async def handle_message(update: Update, context):
-    """Обработчик сообщений"""
     text = update.message.text
-
     if text == "📊 Баланс":
         await show_balance(update, context)
     elif text == "📈 Открытые сделки":
@@ -108,29 +110,12 @@ async def run_telegram_bot():
     print("✅ Telegram-бот запущен!")
     await application.run_polling()
 
-# 🔹 Торговые пары (Только ADAUSDT, IPUSDT, TSTUSDT)
+# 🔹 WebSocket для фьючерсов
 TRADE_PAIRS = ["adausdt", "ipusdt", "tstusdt"]
-
-# 🔹 WebSocket URL
-STREAMS = "/".join([f"{pair}@kline_5m" for pair in TRADE_PAIRS])
-BINANCE_WS_URL = f"wss://fstream.binance.com/stream?streams={STREAMS}"
-
-# 🔹 Данные для анализа
+BINANCE_WS_URL = f"wss://fstream.binance.com/stream?streams=" + "/".join([f"{pair}@aggTrade" for pair in TRADE_PAIRS])
 candle_data = {pair: [] for pair in TRADE_PAIRS}
 
-def on_open(ws):
-    print("✅ WebSocket подключён!")
-
-def on_close(ws, close_status_code, close_msg):
-    print("❌ WebSocket закрыт! Переподключение...")
-    asyncio.run(asyncio.sleep(5))
-    ws.run_forever()
-
-def on_error(ws, error):
-    print(f"⚠️ Ошибка WebSocket: {error}")
-
 def calculate_rsi(prices, period=14):
-    """Расчёт RSI"""
     if len(prices) < period:
         return None
     delta = np.diff(prices)
@@ -138,57 +123,43 @@ def calculate_rsi(prices, period=14):
     loss = np.where(delta < 0, -delta, 0)
     avg_gain = np.mean(gain[-period:])
     avg_loss = np.mean(loss[-period:])
-    rs = avg_gain / avg_loss if avg_loss != 0 else 0
-    rsi = 100 - (100 / (1 + rs))
-    return round(rsi, 2)
+    
+    if avg_loss == 0:
+        return 100
+    if avg_gain == 0:
+        return 0
+    
+    rs = avg_gain / avg_loss
+    return round(100 - (100 / (1 + rs)), 2)
 
 def on_message(ws, message):
-    """Обработчик данных WebSocket"""
     data = json.loads(message)
-    
     if "stream" in data and "data" in data:
         stream = data["stream"]
         pair = stream.split("@")[0].upper()
-        kline = data["data"]["k"]
-        price = float(kline["c"])
-        is_closed = kline["x"]
+        price = float(data["data"]["p"])
 
         print(f"📊 {pair} | Цена: {price}")
+        candle_data[pair].append(price)
 
-        if is_closed:
-            candle_data[pair].append(price)
+        if len(candle_data[pair]) > 50:
+            candle_data[pair].pop(0)
 
-            if len(candle_data[pair]) > 50:
-                candle_data[pair].pop(0)
-
-            rsi = calculate_rsi(candle_data[pair])
-
-            if rsi is not None:
-                print(f"📊 {pair} RSI: {rsi}")
-
-                if rsi < 30:
-                    signal = f"🚀 Лонг {pair}!\nЦена: {price}\nRSI: {rsi}"
-                    asyncio.run(send_telegram_message(signal))
-                elif rsi > 70:
-                    signal = f"⚠️ Шорт {pair}!\nЦена: {price}\nRSI: {rsi}"
-                    asyncio.run(send_telegram_message(signal))
+        rsi = calculate_rsi(candle_data[pair])
+        if rsi is not None:
+            print(f"📊 {pair} RSI: {rsi}")
+            if rsi < 30:
+                asyncio.run(send_telegram_message(f"🚀 Лонг {pair}!\nЦена: {price}\nRSI: {rsi}"))
+            elif rsi > 70:
+                asyncio.run(send_telegram_message(f"⚠️ Шорт {pair}!\nЦена: {price}\nRSI: {rsi}"))
 
 async def start_websocket():
-    """Запуск WebSocket"""
-    ws = websocket.WebSocketApp(
-        BINANCE_WS_URL,
-        on_open=on_open,
-        on_close=on_close,
-        on_error=on_error,
-        on_message=on_message
-    )
+    ws = websocket.WebSocketApp(BINANCE_WS_URL, on_message=on_message)
     ws.run_forever()
 
 async def main():
-    """Основной запуск"""
-    await startup_message()
-    asyncio.create_task(start_websocket())
-    await run_telegram_bot()
+    asyncio.create_task(run_telegram_bot())
+    await start_websocket()
 
 if __name__ == "__main__":
     asyncio.run(main())
