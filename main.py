@@ -17,10 +17,14 @@ exchange = ccxt.binance({
     'apiKey': BINANCE_API_KEY,
     'enableRateLimit': True,
     'options': {
-        'defaultType': 'spot',
+        'defaultType': 'future',  # Используем фьючерсы
         'adjustForTimeDifference': True
+    },
+    'urls': {
+        'api': 'https://api1.binance.com'  # Альтернативный сервер
     }
 })
+
 
 
 
