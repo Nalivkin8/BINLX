@@ -112,7 +112,7 @@ async def run_telegram_bot():
 
 # 🔹 WebSocket для фьючерсов
 TRADE_PAIRS = ["adausdt", "ipusdt", "tstusdt"]
-BINANCE_WS_URL = f"wss://fstream.binance.com/stream?streams=" + "/".join([f"{pair}@aggTrade" for pair in TRADE_PAIRS])
+BINANCE_WS_URL = f"wss://fstream.binance.com/stream?streams=" + "/".join([f"{pair}@kline_5m" for pair in TRADE_PAIRS])
 candle_data = {pair: [] for pair in TRADE_PAIRS}
 
 def calculate_rsi(prices, period=14):
@@ -137,21 +137,24 @@ def on_message(ws, message):
     if "stream" in data and "data" in data:
         stream = data["stream"]
         pair = stream.split("@")[0].upper()
-        price = float(data["data"]["p"])
+        price = float(data["data"]["k"]["c"])
+        is_closed = data["data"]["k"]["x"]
 
         print(f"📊 {pair} | Цена: {price}")
-        candle_data[pair].append(price)
 
-        if len(candle_data[pair]) > 50:
-            candle_data[pair].pop(0)
+        if is_closed:
+            candle_data[pair].append(price)
 
-        rsi = calculate_rsi(candle_data[pair])
-        if rsi is not None:
-            print(f"📊 {pair} RSI: {rsi}")
-            if rsi < 30:
-                asyncio.run(send_telegram_message(f"🚀 Лонг {pair}!\nЦена: {price}\nRSI: {rsi}"))
-            elif rsi > 70:
-                asyncio.run(send_telegram_message(f"⚠️ Шорт {pair}!\nЦена: {price}\nRSI: {rsi}"))
+            if len(candle_data[pair]) > 50:
+                candle_data[pair].pop(0)
+
+            rsi = calculate_rsi(candle_data[pair])
+            if rsi is not None:
+                print(f"📊 {pair} RSI: {rsi}")
+                if rsi < 30:
+                    asyncio.run(send_telegram_message(f"🚀 Лонг {pair}!\nЦена: {price}\nRSI: {rsi}"))
+                elif rsi > 70:
+                    asyncio.run(send_telegram_message(f"⚠️ Шорт {pair}!\nЦена: {price}\nRSI: {rsi}"))
 
 async def start_websocket():
     ws = websocket.WebSocketApp(BINANCE_WS_URL, on_message=on_message)
