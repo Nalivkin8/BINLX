@@ -29,13 +29,14 @@ exchange = ccxt.binance({
     'apiKey': BINANCE_API_KEY,
     'enableRateLimit': True,
     'options': {
-        'defaultType': 'future',  # Работаем с фьючерсами
+        'defaultType': 'future',
         'adjustForTimeDifference': True
     },
     'urls': {
-        'api': 'https://api1.binance.com'  # Используем альтернативный сервер Binance
+        'api': 'https://api1.binance.com'  # ✅ Используем основной API Binance
     }
 })
+
 
 print("📡 Подключение к Binance...")
 
