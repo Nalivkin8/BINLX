@@ -9,7 +9,6 @@ import websocket
 from urllib.parse import urlencode
 from telegram import Bot, Update, KeyboardButton, ReplyKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
-import numpy as np
 
 # 🔹 API-ключи
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -20,27 +19,44 @@ BINANCE_SECRET_KEY = os.getenv("BINANCE_SECRET_KEY")
 # 🔹 Binance API URL
 BINANCE_FUTURES_URL = "https://fapi.binance.com"
 
+# 🔹 Временной сдвиг (будет обновляться при запуске)
+SERVER_TIME_OFFSET = 0
+
 # 🔹 WebSocket URL
 TRADE_PAIRS = ["adausdt", "ipusdt", "tstusdt"]
 BINANCE_WS_URL = f"wss://fstream.binance.com/stream?streams=" + "/".join([f"{pair}@kline_5m" for pair in TRADE_PAIRS])
 
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
-candle_data = {pair: [] for pair in TRADE_PAIRS}
+
+def get_binance_time():
+    """🔹 Получение серверного времени Binance и расчёт смещения"""
+    global SERVER_TIME_OFFSET
+    url = f"{BINANCE_FUTURES_URL}/fapi/v1/time"
+    
+    try:
+        response = requests.get(url)
+        server_time = response.json()["serverTime"]
+        local_time = int(time.time() * 1000)
+        SERVER_TIME_OFFSET = server_time - local_time
+        print(f"✅ Время синхронизировано! Смещение: {SERVER_TIME_OFFSET} мс")
+    except Exception as e:
+        print(f"❌ Ошибка получения времени Binance: {e}")
 
 def sign_request(params):
-    """Создаёт подпись для Binance API"""
+    """🔹 Создаёт подпись для Binance API"""
+    params["timestamp"] = int(time.time() * 1000) + SERVER_TIME_OFFSET
     query_string = urlencode(params)
     signature = hmac.new(BINANCE_SECRET_KEY.encode(), query_string.encode(), hashlib.sha256).hexdigest()
     params["signature"] = signature
     return params
 
 async def send_telegram_message(text):
-    """Отправка сообщений в Telegram"""
+    """🔹 Отправка сообщений в Telegram"""
     print(f"📨 Telegram: {text}")
     await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=text)
 
 async def get_order_book(symbol):
-    """Запрос стакана ордеров"""
+    """🔹 Запрос стакана ордеров"""
     url = f"{BINANCE_FUTURES_URL}/fapi/v1/depth"
     params = {"symbol": symbol.upper(), "limit": 10}
 
@@ -63,26 +79,6 @@ async def get_order_book(symbol):
     except Exception as e:
         return f"❌ Ошибка запроса стакана ордеров: {e}"
 
-async def get_recent_trades(symbol):
-    """Запрос последних сделок"""
-    url = f"{BINANCE_FUTURES_URL}/fapi/v1/trades"
-    params = {"symbol": symbol.upper(), "limit": 5}
-
-    try:
-        response = requests.get(url, params=params)
-        trades = response.json()
-
-        trade_report = f"📈 Последние сделки {symbol.upper()}:\n"
-        for trade in trades:
-            price = trade["price"]
-            qty = trade["qty"]
-            side = "🟢 Покупка" if trade["isBuyerMaker"] else "🔴 Продажа"
-            trade_report += f"{side} | Цена: {price} | Кол-во: {qty}\n"
-
-        return trade_report
-    except Exception as e:
-        return f"❌ Ошибка запроса сделок: {e}"
-
 async def start(update: Update, context):
     keyboard = [
         [KeyboardButton("📊 Order Book ADA"), KeyboardButton("📈 Сделки ADA")],
@@ -96,51 +92,31 @@ async def handle_message(update: Update, context):
     if text == "📊 Order Book ADA":
         result = await get_order_book("ADAUSDT")
         await update.message.reply_text(result)
-    elif text == "📈 Сделки ADA":
-        result = await get_recent_trades("ADAUSDT")
-        await update.message.reply_text(result)
     elif text == "📊 Order Book IP":
         result = await get_order_book("IPUSDT")
-        await update.message.reply_text(result)
-    elif text == "📈 Сделки IP":
-        result = await get_recent_trades("IPUSDT")
         await update.message.reply_text(result)
     else:
         await update.message.reply_text("❌ Команда не распознана")
 
 async def run_telegram_bot():
-    """Запуск Telegram-бота"""
+    """🔹 Запуск Telegram-бота"""
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     print("✅ Telegram-бот запущен!")
     await application.run_polling()
 
-def on_message(ws, message):
-    """Обработка входящих данных из WebSocket"""
-    data = json.loads(message)
-    if "stream" in data and "data" in data:
-        stream = data["stream"]
-        pair = stream.split("@")[0].upper()
-        price = float(data["data"]["k"]["c"])
-        is_closed = data["data"]["k"]["x"]
-
-        print(f"📊 {pair} | Цена: {price}")
-
-        if is_closed:
-            candle_data[pair].append(price)
-
-            if len(candle_data[pair]) > 50:
-                candle_data[pair].pop(0)
-
 def start_websocket():
-    """Запуск WebSocket"""
-    ws = websocket.WebSocketApp(BINANCE_WS_URL, on_message=on_message)
+    """🔹 Запуск WebSocket"""
+    ws = websocket.WebSocketApp(BINANCE_WS_URL)
     ws.run_forever()
 
 async def main():
-    """Запуск бота и WebSocket в одном event loop"""
+    """🔹 Запуск бота и WebSocket в одном event loop"""
     loop = asyncio.get_running_loop()
+
+    # Синхронизируем время с Binance перед стартом
+    get_binance_time()
     
     # Telegram-бот и WebSocket работают параллельно
     telegram_task = asyncio.create_task(run_telegram_bot())
