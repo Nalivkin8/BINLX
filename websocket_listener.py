@@ -14,9 +14,13 @@ async def start_futures_websocket(bot, chat_id):
     await asyncio.to_thread(ws.run_forever)
 
 async def process_futures_message(bot, chat_id, message):
-    data = json.loads(message)
-    price = float(data['p'])
-    await bot.send_message(chat_id, f"🔥 Текущая цена BTC/USDT (Futures): {price}")
+    try:
+        data = json.loads(message)
+        price = float(data.get('p', 0))  # Используем get() для предотвращения KeyError
+        if price > 0:
+            await bot.send_message(chat_id, f"🔥 Текущая цена BTC/USDT (Futures): {price}")
+    except Exception as e:
+        print(f"❌ Ошибка WebSocket: {e}")
 
 def on_open(ws):
     subscribe_message = json.dumps({
