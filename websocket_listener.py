@@ -89,9 +89,9 @@ async def process_futures_message(bot, chat_id, message):
                 signal = None
                 if (
                     last_macd > last_signal_line
-                    and last_macd - last_signal_line > 0.005  # БЫЛО 0.01, теперь быстрее даёт сигнал
+                    and last_macd - last_signal_line > 0.005  
                     and last_adx > 8  
-                    and last_rsi >= 55  # БЫЛО 50, теперь даёт сигнал раньше
+                    and last_rsi >= 55  
                     and trend == "Bullish"  
                     and price > df['EMA_50'].iloc[-1]  
                 ):  
@@ -99,13 +99,22 @@ async def process_futures_message(bot, chat_id, message):
 
                 elif (
                     last_macd < last_signal_line
-                    and last_signal_line - last_macd > 0.005  # Аналогично для SHORT
+                    and last_signal_line - last_macd > 0.005  
                     and last_adx > 8  
                     and last_rsi <= 55  
                     and trend == "Bearish"
                     and price < df['EMA_50'].iloc[-1]  
                 ):  
                     signal = "SHORT"
+
+                # **Обновление логики RSI**
+                if signal == "LONG" and last_rsi > 70:
+                    if last_rsi > 75 and last_macd < last_signal_line:  
+                        signal = None  # LONG запрещён, если RSI > 75 и MACD не подтверждает
+
+                if signal == "SHORT" and last_rsi < 30:
+                    if last_rsi < 25 and last_macd > last_signal_line:
+                        signal = None  # SHORT запрещён, если RSI < 25 и MACD не подтверждает
 
                 # **Динамический TP и SL на основе ATR**
                 if signal:
