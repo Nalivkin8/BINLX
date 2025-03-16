@@ -2,10 +2,9 @@ import websocket
 import json
 import asyncio
 import pandas as pd
-import numpy as np
 import time
 
-# Переменные для контроля частоты сообщений
+# Переменные для контроля частоты сигналов
 last_sent_time = 0
 last_signal = None
 price_history = []
@@ -31,14 +30,15 @@ async def process_futures_message(bot, chat_id, message):
         if price > 0:
             price_history.append(price)
 
-            # Анализируем рынок, если есть минимум 50 цен для расчета индикаторов
+            # Храним только 50 последних цен
             if len(price_history) > 50:
+                price_history.pop(0)
+
                 df = pd.DataFrame(price_history, columns=['close'])
                 df['SMA_50'] = df['close'].rolling(window=50).mean()
                 df['RSI'] = compute_rsi(df['close'])
                 df['MACD'], df['Signal_Line'] = compute_macd(df['close'])
 
-                # Берем последние значения индикаторов
                 last_rsi = df['RSI'].iloc[-1]
                 last_macd = df['MACD'].iloc[-1]
                 last_signal_line = df['Signal_Line'].iloc[-1]
@@ -50,9 +50,9 @@ async def process_futures_message(bot, chat_id, message):
                 elif last_rsi > 70 and last_macd < last_signal_line:
                     signal = "SHORT"
 
-                # Проверяем, чтобы сигнал не повторялся слишком часто
+                # Отправляем сигнал только если он новый и прошло >3 минут
                 current_time = time.time()
-                if signal and (last_signal != signal or current_time - last_sent_time > 60):
+                if signal and (last_signal != signal or current_time - last_sent_time > 180):
                     last_signal = signal
                     last_sent_time = current_time
                     take_profit = round(price * 1.02, 2)  # +2% от цены
@@ -87,7 +87,7 @@ def compute_macd(prices, short_window=12, long_window=26, signal_window=9):
     signal_line = macd.ewm(span=signal_window, adjust=False).mean()
     return macd, signal_line
 
-# Отправляем подписку на Binance WebSocket
+# Подписываемся на WebSocket Binance Futures
 def on_open(ws):
     subscribe_message = json.dumps({
         "method": "SUBSCRIBE",
