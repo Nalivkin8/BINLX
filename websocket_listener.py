@@ -4,6 +4,7 @@ import websocket
 import asyncio
 import pandas as pd
 from aiogram.exceptions import TelegramRetryAfter
+import numpy as np  # Для обработки NaN
 
 # Храним активные сделки и Stop Loss
 active_trades = {}
@@ -73,6 +74,10 @@ async def process_futures_message(bot, chat_id, message):
 
                 last_atr = compute_atr(df)  
 
+                # **Фикс NaN в ATR**
+                if np.isnan(last_atr) or last_atr == 0:
+                    last_atr = 0.2  # Дефолтное значение
+
                 # Определение сигнала
                 signal = None
                 if price > df['close'].rolling(10).mean().iloc[-1]:
@@ -82,11 +87,15 @@ async def process_futures_message(bot, chat_id, message):
 
                 if signal:
                     # **Динамический % TP и SL по ATR**
-                    tp_percentage = round(10 + (last_atr * 20), 1)  # Может быть 10-20%
-                    sl_percentage = round(5 + (last_atr * 10), 1)  # Может быть 5-10%
+                    tp_percentage = round(10 + (last_atr * 20), 1)  
+                    sl_percentage = round(5 + (last_atr * 10), 1)  
 
-                    tp = round(price * (1 + tp_percentage / 100), 6) if signal == "LONG" else round(price * (1 - tp_percentage / 100), 6)
-                    sl = round(price * (1 - sl_percentage / 100), 6) if signal == "LONG" else round(price * (1 + sl_percentage / 100), 6)
+                    # **Фикс NaN в TP и SL**
+                    try:
+                        tp = round(price * (1 + tp_percentage / 100), 6) if signal == "LONG" else round(price * (1 - tp_percentage / 100), 6)
+                        sl = round(price * (1 - sl_percentage / 100), 6) if signal == "LONG" else round(price * (1 + sl_percentage / 100), 6)
+                    except:
+                        tp, sl = price * 1.01, price * 0.99  # Запасной вариант
 
                     if tp <= 0 or sl <= 0:
                         return
@@ -116,4 +125,8 @@ def compute_atr(df, period=14):
     df['low'] = df['close'].shift(-1)
     df['tr'] = abs(df['high'] - df['low'])
     df['ATR'] = df['tr'].rolling(window=period).mean()
+    
+    if df['ATR'].isna().any():  
+        return 0.2  # Фикс NaN
+    
     return df['ATR'].iloc[-1] if not df['ATR'].empty else 0.2  
