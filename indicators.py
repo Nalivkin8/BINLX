@@ -1,54 +1,45 @@
-import pandas as pd
-import requests
+import websocket
+import json
+import asyncio
+import time
 
-# Получение данных с Binance Futures
-def get_futures_data(symbol, interval='15m', limit=100):
-    url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval={interval}&limit={limit}"
-    
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-        "Accept": "application/json",
-    }
-    
-    response = requests.get(url, headers=headers)
-    
-    if response.status_code != 200:
-        print(f"❌ Ошибка Binance Futures API: {response.status_code}")
-        return pd.DataFrame()
+last_sent_price = None
+last_sent_time = 0
 
-    data = response.json()
-    
-    if not data:
-        print("❌ Binance API вернул пустой массив!")
-        return pd.DataFrame()
-    
-    df = pd.DataFrame(data, columns=['time', 'open', 'high', 'low', 'close', 'volume', '_', '_', '_', '_', '_', '_'])
-    df['close'] = df['close'].astype(float)
-    return df
+# Подключение к WebSocket Binance Futures
+async def start_futures_websocket(bot, chat_id):
+    loop = asyncio.get_event_loop()
+    ws = websocket.WebSocketApp(
+        "wss://fstream.binance.com/ws/btcusdt@trade",
+        on_message=lambda ws, msg: loop.create_task(process_futures_message(bot, chat_id, msg)),
+        on_open=on_open
+    )
 
-# Рассчет индикаторов
-def compute_indicators(df):
-    if df.empty:
-        return df
+    await asyncio.to_thread(ws.run_forever)
 
-    df['SMA_50'] = df['close'].rolling(window=50).mean()
-    df['SMA_200'] = df['close'].rolling(window=200).mean()
-    df['ATR'] = df['high'].rolling(14).max() - df['low'].rolling(14).min()
-    return df
+# Фильтруем сообщения, чтобы Telegram не блокировал бота
+async def process_futures_message(bot, chat_id, message):
+    global last_sent_price, last_sent_time
+    try:
+        data = json.loads(message)
+        price = float(data.get('p', 0))  # Проверяем, что 'p' есть в данных
 
-# Генерация сигналов с расчетом TP/SL
-def generate_signal(df):
-    if df.empty:
-        return None, None, None, None
+        # Проверяем, изменился ли курс с момента последнего сообщения
+        if price > 0 and (last_sent_price is None or abs(price - last_sent_price) > 5):
+            current_time = time.time()
+            if current_time - last_sent_time >= 10:  # Минимальный интервал 10 сек
+                last_sent_price = price
+                last_sent_time = current_time
+                await bot.send_message(chat_id, f"🔥 Текущая цена BTC/USDT (Futures): {price}")
 
-    last_row = df.iloc[-1]
+    except Exception as e:
+        print(f"❌ Ошибка WebSocket: {e}")
 
-    take_profit = last_row['close'] + 1.5 * last_row['ATR']
-    stop_loss = last_row['close'] - 1.5 * last_row['ATR']
-
-    if last_row['close'] > last_row['SMA_50'] and last_row['close'] > last_row['SMA_200']:
-        return "LONG", last_row['close'], take_profit, stop_loss
-    elif last_row['close'] < last_row['SMA_50'] and last_row['close'] < last_row['SMA_200']:
-        return "SHORT", last_row['close'], take_profit, stop_loss
-    
-    return None, None, None, None
+# Отправляем подписку на Binance WebSocket
+def on_open(ws):
+    subscribe_message = json.dumps({
+        "method": "SUBSCRIBE",
+        "params": ["btcusdt@trade"],
+        "id": 1
+    })
+    ws.send(subscribe_message)
