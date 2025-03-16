@@ -1,7 +1,7 @@
 import os
 import asyncio
 from aiogram import Bot, Dispatcher
-from websocket_listener import start_futures_websocket  # Только WebSocket
+from websocket_listener import start_futures_websocket  # WebSocket с новыми парами
 
 # Загружаем переменные окружения (Railway Variables)
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
