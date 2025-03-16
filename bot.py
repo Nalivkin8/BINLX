@@ -1,7 +1,11 @@
+import os
 import asyncio
 from aiogram import Bot, Dispatcher, types
 from indicators import get_historical_data, compute_indicators, generate_signal
-from config import TELEGRAM_BOT_TOKEN, CHAT_ID
+
+# Загружаем ключи из Railway Variables
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
 dp = Dispatcher(bot)
