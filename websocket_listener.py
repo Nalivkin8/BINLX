@@ -6,7 +6,7 @@ import time
 from aiogram.exceptions import TelegramRetryAfter
 
 # Храним активные сделки
-active_trades = {}  # {"TSTUSDT": {"signal": "LONG", "entry": 5.50, "tp": 6.05, "sl": 5.23}}
+active_trades = {}
 price_history = {"TSTUSDT": [], "IPUSDT": [], "ADAUSDT": []}
 
 # Подключение к WebSocket Binance Futures
@@ -34,27 +34,29 @@ async def process_futures_message(bot, chat_id, message):
     global active_trades, price_history
     try:
         data = json.loads(message)
-
         if 's' in data and 'p' in data:
             symbol = data['s']
             price = float(data['p'])
 
-            # Проверяем активные сделки
+            # Проверяем TP/SL
             if symbol in active_trades:
                 trade = active_trades[symbol]
 
-                # TP достигнут → закрытие сделки
+                # TP достигнут
                 if (trade["signal"] == "LONG" and price >= trade["tp"]) or (trade["signal"] == "SHORT" and price <= trade["tp"]):
+                    print(f"🎯 {symbol} достиг Take Profit ({trade['tp']} USDT)")
                     await bot.send_message(chat_id, f"🎯 **{symbol} достиг Take Profit ({trade['tp']} USDT)**")
                     del active_trades[symbol]
 
-                # SL достигнут → закрытие сделки
+                # SL достигнут
                 elif (trade["signal"] == "LONG" and price <= trade["sl"]) or (trade["signal"] == "SHORT" and price >= trade["sl"]):
+                    print(f"⛔ {symbol} достиг Stop Loss ({trade['sl']} USDT)")
                     await bot.send_message(chat_id, f"⛔ **{symbol} достиг Stop Loss ({trade['sl']} USDT)**")
                     del active_trades[symbol]
 
                 return  
 
+            # Обновление истории цен
             if symbol in price_history:
                 price_history[symbol].append(price)
 
@@ -63,41 +65,38 @@ async def process_futures_message(bot, chat_id, message):
 
                     df = pd.DataFrame(price_history[symbol], columns=['close'])
                     df['ATR'] = compute_atr(df)
+                    df['Support'], df['Resistance'] = compute_support_resistance(df)
                     df['RSI'] = compute_rsi(df['close'])
                     df['MACD'], df['Signal_Line'] = compute_macd(df['close'])
+                    df['ADX'] = compute_adx(df)
 
                     last_atr = df['ATR'].iloc[-1]
+                    last_support = df['Support'].iloc[-1]
+                    last_resistance = df['Resistance'].iloc[-1]
                     last_rsi = df['RSI'].iloc[-1]
                     last_macd = df['MACD'].iloc[-1]
                     last_signal_line = df['Signal_Line'].iloc[-1]
+                    last_adx = df['ADX'].iloc[-1]
 
                     signal = None
-                    if (
-                        last_macd > last_signal_line and last_atr > 0.1 and last_rsi < 60
-                    ):
+                    if last_macd > last_signal_line and last_adx > 15 and last_atr > 0.1 and (last_rsi < 40 or (last_rsi < 50 and last_adx < 20)):
                         signal = "LONG"
-                    elif (
-                        last_macd < last_signal_line and last_atr > 0.1 and last_rsi > 40
-                    ):
+                    elif last_macd < last_signal_line and last_adx > 15 and last_atr > 0.1 and (last_rsi > 60 or (last_rsi > 75 and last_adx < 20)):
                         signal = "SHORT"
-
+    
                     if signal:
-                        # Гибкие TP и SL
-                        tp_percent = min(10 + last_atr * 2, 30) / 100  
-                        sl_percent = min(5 + last_atr * 1.5, 15) / 100  
-
-                        tp = round(price * (1 + tp_percent) if signal == "LONG" else price * (1 - tp_percent), 6)
-                        sl = round(price * (1 - sl_percent) if signal == "LONG" else price * (1 + sl_percent), 6)
+                        tp = round(last_resistance, 2) if signal == "LONG" else round(last_support, 2)
+                        sl = round(price - last_atr, 2) if signal == "LONG" else round(price + last_atr, 2)
 
                         active_trades[symbol] = {"signal": signal, "entry": price, "tp": tp, "sl": sl}
-
-                        signal_emoji = "🟢" if signal == "LONG" else "🔴"
-
+                        
+                        print(f"📢 Генерация сигнала: {signal} {symbol}, Цена входа: {price}")
+                        
                         message = (
-                            f"{signal_emoji} **{signal} {symbol} (Futures)**\n"
+                            f"{'🟢' if signal == 'LONG' else '🔴'} **{signal} {symbol} (Futures)**\n"
                             f"🔹 **Вход**: {price} USDT\n"
-                            f"🎯 **TP**: {tp} USDT | {round(tp_percent * 100, 1)}%\n"
-                            f"⛔ **SL**: {sl} USDT | {round(sl_percent * 100, 1)}%"
+                            f"🎯 **TP**: {tp} USDT | {round((tp/price - 1) * 100, 1)}%\n"
+                            f"⛔ **SL**: {sl} USDT | {round((1 - sl/price) * 100, 1)}%"
                         )
                         await send_message_safe(bot, chat_id, message)
 
@@ -118,9 +117,16 @@ async def send_message_safe(bot, chat_id, message):
 
 # Функции индикаторов
 def compute_atr(df, period=14):
-    df['tr'] = df['close'].diff().abs()
-    atr = df['tr'].rolling(window=period).mean()
-    return atr
+    high = df['close'].shift(1)
+    low = df['close'].shift(-1)
+    tr = abs(high - low)
+    atr = tr.rolling(window=period).mean()
+    return atr.iloc[-1]  
+
+def compute_support_resistance(df, period=50):
+    support = df['close'].rolling(window=period).min()
+    resistance = df['close'].rolling(window=period).max()
+    return support, resistance
 
 def compute_rsi(prices, period=14):
     delta = prices.diff()
@@ -136,3 +142,7 @@ def compute_macd(prices, short_window=12, long_window=26, signal_window=9):
     macd = short_ema - long_ema
     signal_line = macd.ewm(span=signal_window, adjust=False).mean()
     return macd, signal_line
+
+def compute_adx(df, period=14):
+    return df['close'].rolling(window=period).mean()
+
