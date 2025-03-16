@@ -28,13 +28,15 @@ def on_open(ws):
     })
     ws.send(subscribe_message)
     print("✅ Подключено к WebSocket Binance Futures")
+    print("📩 Подписка на пары отправлена: TSTUSDT, IPUSDT")
 
 # Обрабатываем сообщения WebSocket
 async def process_futures_message(bot, chat_id, message):
     global active_trades, price_history
     try:
-        data = json.loads(message)
+        print(f"🔄 Получены данные от Binance: {message}")  # Проверяем, приходят ли данные
 
+        data = json.loads(message)
         if 's' in data and 'p' in data:
             symbol = data['s']
             price = float(data['p'])
@@ -45,11 +47,13 @@ async def process_futures_message(bot, chat_id, message):
 
                 # TP достигнут → закрытие сделки
                 if (trade["signal"] == "LONG" and price >= trade["tp"]) or (trade["signal"] == "SHORT" and price <= trade["tp"]):
+                    print(f"🎯 {symbol} достиг Take Profit ({trade['tp']} USDT)")
                     await bot.send_message(chat_id, f"🎯 **{symbol} достиг Take Profit ({trade['tp']} USDT)**")
                     del active_trades[symbol]
 
                 # SL достигнут → закрытие сделки
                 elif (trade["signal"] == "LONG" and price <= trade["sl"]) or (trade["signal"] == "SHORT" and price >= trade["sl"]):
+                    print(f"⛔ {symbol} достиг Stop Loss ({trade['sl']} USDT)")
                     await bot.send_message(chat_id, f"⛔ **{symbol} достиг Stop Loss ({trade['sl']} USDT)**")
                     del active_trades[symbol]
 
@@ -77,16 +81,16 @@ async def process_futures_message(bot, chat_id, message):
                     last_adx = df['ADX'].iloc[-1]
 
                     signal = None
-                    if (last_rsi < 35 
+                    if (last_rsi < 40 
                         and last_macd > last_signal_line 
-                        and last_adx > 20 
-                        and last_atr > 0.2):
+                        and last_adx > 15 
+                        and last_atr > 0.1):
                         signal = "LONG"
 
-                    elif (last_rsi > 65 
+                    elif (last_rsi > 60 
                           and last_macd < last_signal_line 
-                          and last_adx > 20 
-                          and last_atr > 0.2):
+                          and last_adx > 15 
+                          and last_atr > 0.1):
                         signal = "SHORT"
 
                     if signal:
@@ -94,7 +98,9 @@ async def process_futures_message(bot, chat_id, message):
                         sl = round(price - last_atr, 2) if signal == "LONG" else round(price + last_atr, 2)
 
                         active_trades[symbol] = {"signal": signal, "entry": price, "tp": tp, "sl": sl}
-
+                        
+                        print(f"📢 Генерация сигнала: {signal} {symbol}, Цена входа: {price}")
+                        
                         message = (
                             f"📌 **Сигнал на {signal} {symbol} (Futures)**\n"
                             f"🔹 **Цена входа**: {price} USDT\n"
@@ -105,12 +111,24 @@ async def process_futures_message(bot, chat_id, message):
                             f"📊 **MACD**: {round(last_macd, 2)} / {round(last_signal_line, 2)}\n"
                             f"📊 **ADX**: {round(last_adx, 2)}"
                         )
-                        await bot.send_message(chat_id, message)
+                        await send_message_safe(bot, chat_id, message)
 
     except Exception as e:
         print(f"❌ Ошибка WebSocket: {e}")
 
-# Функция расчета ATR
+# Безопасная отправка сообщений в Telegram
+async def send_message_safe(bot, chat_id, message):
+    try:
+        print(f"📤 Отправка сообщения: {message}")
+        await bot.send_message(chat_id, message)
+    except TelegramRetryAfter as e:
+        print(f"⏳ Telegram ограничил отправку, ждем {e.retry_after} сек...")
+        await asyncio.sleep(e.retry_after)
+        await send_message_safe(bot, chat_id, message)
+    except Exception as e:
+        print(f"❌ Ошибка при отправке в Telegram: {e}")
+
+# Функции индикаторов
 def compute_atr(df, period=14):
     high = df['close'].shift(1)
     low = df['close'].shift(-1)
@@ -118,13 +136,11 @@ def compute_atr(df, period=14):
     atr = tr.rolling(window=period).mean()
     return atr.iloc[-1]  
 
-# Функция определения уровней поддержки и сопротивления
 def compute_support_resistance(df, period=50):
     support = df['close'].rolling(window=period).min()
     resistance = df['close'].rolling(window=period).max()
     return support, resistance
 
-# Функция расчета RSI
 def compute_rsi(prices, period=14):
     delta = prices.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
@@ -133,7 +149,6 @@ def compute_rsi(prices, period=14):
     rsi = 100 - (100 / (1 + rs))
     return rsi
 
-# Функция расчета MACD
 def compute_macd(prices, short_window=12, long_window=26, signal_window=9):
     short_ema = prices.ewm(span=short_window, adjust=False).mean()
     long_ema = prices.ewm(span=long_window, adjust=False).mean()
@@ -141,7 +156,6 @@ def compute_macd(prices, short_window=12, long_window=26, signal_window=9):
     signal_line = macd.ewm(span=signal_window, adjust=False).mean()
     return macd, signal_line
 
-# Функция расчета ADX
 def compute_adx(df, period=14):
     high = df['close'].shift(1)
     low = df['close'].shift(-1)
