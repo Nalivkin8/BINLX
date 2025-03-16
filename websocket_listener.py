@@ -5,8 +5,8 @@ import pandas as pd
 import time
 from aiogram.exceptions import TelegramRetryAfter
 
-# Храним активные сделки и последние тренды
-active_trades = {}  
+# Храним активные сделки
+active_trades = {}  # {"TSTUSDT": {"signal": "LONG", "entry": 5.50, "tp": 6.05, "sl": 5.23}}
 price_history = {"TSTUSDT": [], "IPUSDT": [], "ADAUSDT": []}
 
 # Подключение к WebSocket Binance Futures
@@ -43,12 +43,12 @@ async def process_futures_message(bot, chat_id, message):
             if symbol in active_trades:
                 trade = active_trades[symbol]
 
-                # Если цена достигла TP → фиксация прибыли
+                # TP достигнут → закрытие сделки
                 if (trade["signal"] == "LONG" and price >= trade["tp"]) or (trade["signal"] == "SHORT" and price <= trade["tp"]):
                     await bot.send_message(chat_id, f"🎯 **{symbol} достиг Take Profit ({trade['tp']} USDT)**")
                     del active_trades[symbol]
 
-                # Если цена достигла SL → фиксация убытка
+                # SL достигнут → закрытие сделки
                 elif (trade["signal"] == "LONG" and price <= trade["sl"]) or (trade["signal"] == "SHORT" and price >= trade["sl"]):
                     await bot.send_message(chat_id, f"⛔ **{symbol} достиг Stop Loss ({trade['sl']} USDT)**")
                     del active_trades[symbol]
@@ -63,39 +63,41 @@ async def process_futures_message(bot, chat_id, message):
 
                     df = pd.DataFrame(price_history[symbol], columns=['close'])
                     df['ATR'] = compute_atr(df)
-                    df['Support'], df['Resistance'] = compute_support_resistance(df)
                     df['RSI'] = compute_rsi(df['close'])
                     df['MACD'], df['Signal_Line'] = compute_macd(df['close'])
 
                     last_atr = df['ATR'].iloc[-1]
-                    last_support = df['Support'].iloc[-1]
-                    last_resistance = df['Resistance'].iloc[-1]
                     last_rsi = df['RSI'].iloc[-1]
                     last_macd = df['MACD'].iloc[-1]
                     last_signal_line = df['Signal_Line'].iloc[-1]
 
                     signal = None
-
-                    # Логика для открытия позиций
-                    if last_macd > last_signal_line and last_rsi < 50:
+                    if (
+                        last_macd > last_signal_line and last_atr > 0.1 and last_rsi < 60
+                    ):
                         signal = "LONG"
-                    elif last_macd < last_signal_line and last_rsi > 50:
+                    elif (
+                        last_macd < last_signal_line and last_atr > 0.1 and last_rsi > 40
+                    ):
                         signal = "SHORT"
 
                     if signal:
-                        tp_multiplier = 2 + last_atr * 5  # TP без ограничения
-                        sl_multiplier = 1 + last_atr * 2  # SL более гибкий
+                        # Гибкие TP и SL
+                        tp_percent = min(10 + last_atr * 2, 30) / 100  
+                        sl_percent = min(5 + last_atr * 1.5, 15) / 100  
 
-                        tp = round(price * (1 + tp_multiplier / 100), 6) if signal == "LONG" else round(price * (1 - tp_multiplier / 100), 6)
-                        sl = round(price * (1 - sl_multiplier / 100), 6) if signal == "LONG" else round(price * (1 + sl_multiplier / 100), 6)
+                        tp = round(price * (1 + tp_percent) if signal == "LONG" else price * (1 - tp_percent), 6)
+                        sl = round(price * (1 - sl_percent) if signal == "LONG" else price * (1 + sl_percent), 6)
 
                         active_trades[symbol] = {"signal": signal, "entry": price, "tp": tp, "sl": sl}
 
+                        signal_emoji = "🟢" if signal == "LONG" else "🔴"
+
                         message = (
-                            f"📌 **Сигнал на {signal} {symbol} (Futures)**\n"
+                            f"{signal_emoji} **{signal} {symbol} (Futures)**\n"
                             f"🔹 **Вход**: {price} USDT\n"
-                            f"🎯 **TP**: {tp} USDT | {tp_multiplier:.1f}%\n"
-                            f"⛔ **SL**: {sl} USDT | {sl_multiplier:.1f}%"
+                            f"🎯 **TP**: {tp} USDT | {round(tp_percent * 100, 1)}%\n"
+                            f"⛔ **SL**: {sl} USDT | {round(sl_percent * 100, 1)}%"
                         )
                         await send_message_safe(bot, chat_id, message)
 
@@ -105,8 +107,10 @@ async def process_futures_message(bot, chat_id, message):
 # Безопасная отправка сообщений в Telegram
 async def send_message_safe(bot, chat_id, message):
     try:
+        print(f"📤 Отправка сообщения: {message}")
         await bot.send_message(chat_id, message)
     except TelegramRetryAfter as e:
+        print(f"⏳ Telegram ограничил отправку, ждем {e.retry_after} сек...")
         await asyncio.sleep(e.retry_after)
         await send_message_safe(bot, chat_id, message)
     except Exception as e:
@@ -114,16 +118,9 @@ async def send_message_safe(bot, chat_id, message):
 
 # Функции индикаторов
 def compute_atr(df, period=14):
-    df['high'] = df['close'].rolling(window=period).max()
-    df['low'] = df['close'].rolling(window=period).min()
-    df['tr'] = df['high'] - df['low']
-    df['ATR'] = df['tr'].rolling(window=period).mean()
-    return df['ATR'].iloc[-1]
-
-def compute_support_resistance(df, period=50):
-    support = df['close'].rolling(window=period).min()
-    resistance = df['close'].rolling(window=period).max()
-    return support, resistance
+    df['tr'] = df['close'].diff().abs()
+    atr = df['tr'].rolling(window=period).mean()
+    return atr
 
 def compute_rsi(prices, period=14):
     delta = prices.diff()
