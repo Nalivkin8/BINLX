@@ -1,16 +1,14 @@
-import time
-import json
 import websocket
+import json
 import asyncio
 import pandas as pd
+import time
 from aiogram.exceptions import TelegramRetryAfter
-import numpy as np  # Для обработки NaN
 
-# Храним активные сделки и Stop Loss
-active_trades = {}
-price_history = {"TSTUSDT": [], "IPUSDT": [], "ADAUSDT": []}  
-reached_sl = {}  
-latest_prices = {}
+# Храним активные сделки и историю цен
+active_trades = {}  # {"TSTUSDT": {"signal": "LONG", "entry": 5.50, "tp": 6.05, "sl": 5.23}}
+price_history = {"TSTUSDT": [], "IPUSDT": [], "ADAUSDT": []}
+last_signal_time = {}  # Последнее время сигнала для каждой пары
 
 # Подключение к WebSocket Binance Futures
 async def start_futures_websocket(bot, chat_id):
@@ -18,7 +16,7 @@ async def start_futures_websocket(bot, chat_id):
     ws = websocket.WebSocketApp(
         "wss://fstream.binance.com/ws",
         on_message=lambda ws, msg: loop.create_task(process_futures_message(bot, chat_id, msg)),
-        on_open=on_open  
+        on_open=on_open
     )
     await asyncio.to_thread(ws.run_forever)
 
@@ -32,101 +30,90 @@ def on_open(ws):
     ws.send(subscribe_message)
     print("✅ Подключено к WebSocket Binance Futures")
 
+# Обрабатываем входящие данные с Binance WebSocket
 async def process_futures_message(bot, chat_id, message):
-    global active_trades, price_history, reached_sl, latest_prices
+    global active_trades, price_history, last_signal_time
     try:
         data = json.loads(message)
+
         if 's' in data and 'p' in data:
             symbol = data['s']
             price = float(data['p'])
-
-            if price <= 0:
-                return  
-
-            latest_prices[symbol] = price  
 
             # Проверяем активные сделки
             if symbol in active_trades:
                 trade = active_trades[symbol]
 
                 if (trade["signal"] == "LONG" and price >= trade["tp"]) or (trade["signal"] == "SHORT" and price <= trade["tp"]):
-                    await bot.send_message(chat_id, f"🎯 **{symbol} достиг Take Profit ({trade['tp']} USDT | +{trade['tp_percent']}%)**")
+                    await send_message_safe(bot, chat_id, f"🎯 **{symbol} достиг Take Profit ({trade['tp']} USDT, +{trade['tp_percent']}%)**")
                     del active_trades[symbol]
-                    reached_sl[symbol] = False  
 
                 elif (trade["signal"] == "LONG" and price <= trade["sl"]) or (trade["signal"] == "SHORT" and price >= trade["sl"]):
-                    if not reached_sl.get(symbol, False):  
-                        await bot.send_message(chat_id, f"⛔ **{symbol} достиг Stop Loss ({trade['sl']} USDT | -{trade['sl_percent']}%)**")
-                        reached_sl[symbol] = True  
+                    await send_message_safe(bot, chat_id, f"⛔ **{symbol} достиг Stop Loss ({trade['sl']} USDT, -{trade['sl_percent']}%)**")
                     del active_trades[symbol]
 
-                return  
+                return  # Если есть активная сделка, дальше не анализируем
 
-            # Обновляем историю цены
+            # Сохраняем историю цен
             if symbol in price_history:
                 price_history[symbol].append(price)
 
                 if len(price_history[symbol]) > 200:
                     price_history[symbol].pop(0)
 
-                df = pd.DataFrame(price_history[symbol], columns=['close'])
-                df['ATR'] = compute_atr(df)
+                    df = pd.DataFrame(price_history[symbol], columns=['close'])
+                    atr = compute_atr(df)
+                    last_price = df['close'].iloc[-1]
 
-                last_atr = compute_atr(df)  
+                    # Гибкие TP и SL в зависимости от ATR и тренда
+                    tp_percent = round(10 + atr * 2, 1)  # Минимум 10%, но растёт с волатильностью
+                    sl_percent = round(5 + atr, 1)  # Минимум 5%, но зависит от ATR
 
-                # **Фикс NaN в ATR**
-                if np.isnan(last_atr) or last_atr == 0:
-                    last_atr = 0.2  # Дефолтное значение
+                    signal = None
+                    if last_price > df['close'].mean() and atr > 0.05:
+                        signal = "LONG"
+                    elif last_price < df['close'].mean() and atr > 0.05:
+                        signal = "SHORT"
 
-                # Определение сигнала
-                signal = None
-                if price > df['close'].rolling(10).mean().iloc[-1]:
-                    signal = "LONG"
-                elif price < df['close'].rolling(10).mean().iloc[-1]:
-                    signal = "SHORT"
+                    # Проверяем время последнего сигнала, чтобы избежать спама
+                    if signal and (symbol not in last_signal_time or time.time() - last_signal_time[symbol] > 60):
+                        entry_price = last_price
+                        tp = round(entry_price * (1 + tp_percent / 100), 5) if signal == "LONG" else round(entry_price * (1 - tp_percent / 100), 5)
+                        sl = round(entry_price * (1 - sl_percent / 100), 5) if signal == "LONG" else round(entry_price * (1 + sl_percent / 100), 5)
 
-                if signal:
-                    # **Динамический % TP и SL по ATR**
-                    tp_percentage = round(10 + (last_atr * 20), 1)  
-                    sl_percentage = round(5 + (last_atr * 10), 1)  
+                        active_trades[symbol] = {
+                            "signal": signal, "entry": entry_price, "tp": tp, "sl": sl,
+                            "tp_percent": tp_percent, "sl_percent": sl_percent
+                        }
+                        last_signal_time[symbol] = time.time()
 
-                    # **Фикс NaN в TP и SL**
-                    try:
-                        tp = round(price * (1 + tp_percentage / 100), 6) if signal == "LONG" else round(price * (1 - tp_percentage / 100), 6)
-                        sl = round(price * (1 - sl_percentage / 100), 6) if signal == "LONG" else round(price * (1 + sl_percentage / 100), 6)
-                    except:
-                        tp, sl = price * 1.01, price * 0.99  # Запасной вариант
-
-                    if tp <= 0 or sl <= 0:
-                        return
-
-                    active_trades[symbol] = {
-                        "signal": signal, "entry": price, 
-                        "tp": tp, "sl": sl, 
-                        "tp_percent": tp_percentage, 
-                        "sl_percent": sl_percentage
-                    }
-                    reached_sl[symbol] = False  
-
-                    message = (
-                        f"📌 **Сигнал на {signal} {symbol} (Futures)**\n"
-                        f"🔹 **Вход**: {price} USDT\n"
-                        f"🎯 **TP**: {tp} USDT | +{tp_percentage}%\n"
-                        f"⛔ **SL**: {sl} USDT | -{sl_percentage}%"
-                    )
-                    await bot.send_message(chat_id, message)
+                        message = (
+                            f"📌 **Сигнал на {signal} {symbol} (Futures)**\n"
+                            f"🔹 **Вход**: {entry_price} USDT\n"
+                            f"🎯 **TP**: {tp} USDT | +{tp_percent}%\n"
+                            f"⛔ **SL**: {sl} USDT | -{sl_percent}%"
+                        )
+                        await send_message_safe(bot, chat_id, message)
 
     except Exception as e:
         print(f"❌ Ошибка WebSocket: {e}")
 
-# Функция расчёта ATR
+# Безопасная отправка сообщений в Telegram
+async def send_message_safe(bot, chat_id, message):
+    try:
+        await bot.send_message(chat_id, message)
+    except TelegramRetryAfter as e:
+        print(f"⏳ Telegram ограничил отправку, ждем {e.retry_after} сек...")
+        await asyncio.sleep(e.retry_after)
+        await send_message_safe(bot, chat_id, message)
+    except Exception as e:
+        print(f"❌ Ошибка при отправке в Telegram: {e}")
+
+# Функция расчёта ATR (гибкий Stop Loss)
 def compute_atr(df, period=14):
-    df['high'] = df['close'].shift(1)
-    df['low'] = df['close'].shift(-1)
-    df['tr'] = abs(df['high'] - df['low'])
-    df['ATR'] = df['tr'].rolling(window=period).mean()
-    
-    if df['ATR'].isna().any():  
-        return 0.2  # Фикс NaN
-    
-    return df['ATR'].iloc[-1] if not df['ATR'].empty else 0.2  
+    high = df['close'].shift(1)
+    low = df['close'].shift(-1)
+    tr = abs(high - low)
+    atr = tr.rolling(window=period).mean()
+    return atr.iloc[-1] if not atr.empty else 0.05  # Минимальное значение ATR
+
