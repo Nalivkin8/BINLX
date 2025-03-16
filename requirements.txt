@@ -1,7 +1,5 @@
+python-binance
 websocket-client
-numpy
 pandas
-python-telegram-bot
-matplotlib
-schedule
-ccxt
+aiogram
+numpy
