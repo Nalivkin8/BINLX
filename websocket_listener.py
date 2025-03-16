@@ -89,8 +89,8 @@ async def process_futures_message(bot, chat_id, message):
                 signal = None
                 if (
                     last_macd > last_signal_line
-                    and last_adx > 10  
-                    and last_rsi < 35  
+                    and last_adx > 8  
+                    and 40 <= last_rsi <= 60  
                     and trend == "Bullish"  
                     and price > df['EMA_50'].iloc[-1]  
                 ):  
@@ -98,68 +98,37 @@ async def process_futures_message(bot, chat_id, message):
 
                 elif (
                     last_macd < last_signal_line
-                    and last_adx > 10  
-                    and last_rsi > 65  
+                    and last_adx > 8  
+                    and 40 <= last_rsi <= 60  
                     and trend == "Bearish"
                     and price < df['EMA_50'].iloc[-1]  
                 ):  
                     signal = "SHORT"
 
+                # **Динамический TP и SL на основе ATR**
                 if signal:
-                    tp = round(last_resistance, 2) if signal == "LONG" else round(last_support, 2)
-                    sl = round(price - last_atr, 2) if signal == "LONG" else round(price + last_atr, 2)
+                    atr = last_atr  # Используем текущий ATR для расчета
+                    tp_multiplier = 3 if atr > 0.5 else 2  # Если волатильность высокая → TP больше
+                    sl_multiplier = 1.5 if atr > 0.5 else 1  # Если волатильность высокая → SL больше
+
+                    tp = round(price + (atr * tp_multiplier), 2) if signal == "LONG" else round(price - (atr * tp_multiplier), 2)
+                    sl = round(price - (atr * sl_multiplier), 2) if signal == "LONG" else round(price + (atr * sl_multiplier), 2)
 
                     active_trades[symbol] = {"signal": signal, "entry": price, "tp": tp, "sl": sl}
 
-                    print(f"📢 Генерация сигнала: {signal} {symbol}, Цена входа: {price}")
+                    print(f"📢 Генерация скальпинг-сигнала: {signal} {symbol}, Цена входа: {price}")
 
                     message = (
-                        f"📌 **Сигнал на {signal} {symbol} (Futures)**\n"
+                        f"📌 **Скальпинг-сигнал на {signal} {symbol} (Futures)**\n"
                         f"🔹 **Цена входа**: {price} USDT\n"
-                        f"🎯 **Take Profit**: {tp} USDT (уровень сопротивления)\n"
-                        f"⛔ **Stop Loss**: {sl} USDT (адаптивный ATR)\n"
+                        f"🎯 **Take Profit**: {tp} USDT (ATR x {tp_multiplier})\n"
+                        f"⛔ **Stop Loss**: {sl} USDT (ATR x {sl_multiplier})\n"
                         f"📊 **ATR**: {round(last_atr, 2)}\n"
+                        f"📊 **ADX**: {round(last_adx, 2)}\n"
                         f"📊 **RSI**: {round(last_rsi, 2)}\n"
-                        f"📊 **MACD**: {round(last_macd, 2)} / {round(last_signal_line, 2)}\n"
-                        f"📊 **ADX**: {round(last_adx, 2)}"
+                        f"📊 **MACD**: {round(last_macd, 2)} / {round(last_signal_line, 2)}"
                     )
                     await bot.send_message(chat_id, message)
 
     except Exception as e:
         print(f"❌ Ошибка WebSocket: {e}")
-
-# Функции индикаторов
-def compute_atr(df, period=14):
-    df['high'] = df['close'].shift(1)
-    df['low'] = df['close'].shift(-1)
-    tr = abs(df['high'] - df['low'])
-    atr = tr.rolling(window=period).mean()
-    return atr  
-
-def compute_support_resistance(df, period=50):
-    support = df['close'].rolling(window=period).min()
-    resistance = df['close'].rolling(window=period).max()
-    return support, resistance
-
-def compute_rsi(prices, period=14):
-    delta = prices.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-    rs = gain / loss
-    rsi = 100 - (100 / (1 + rs))
-    return rsi
-
-def compute_macd(prices, short_window=12, long_window=26, signal_window=9):
-    short_ema = prices.ewm(span=short_window, adjust=False).mean()
-    long_ema = prices.ewm(span=long_window, adjust=False).mean()
-    macd = short_ema - long_ema
-    signal_line = macd.ewm(span=signal_window, adjust=False).mean()
-    return macd, signal_line
-
-def compute_adx(df, period=14):
-    df['high'] = df['close'].shift(1)
-    df['low'] = df['close'].shift(-1)
-    tr = abs(df['high'] - df['low'])
-    atr = tr.rolling(window=period).mean()
-    adx = (atr / atr.max()) * 100
-    return adx
