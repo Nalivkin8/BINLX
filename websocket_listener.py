@@ -3,6 +3,7 @@ import json
 import asyncio
 import pandas as pd
 import time
+from aiogram.exceptions import TelegramRetryAfter
 
 # Переменные для контроля частоты сигналов
 last_sent_time = 0
@@ -65,10 +66,21 @@ async def process_futures_message(bot, chat_id, message):
                         f"📊 **RSI**: {round(last_rsi, 2)}\n"
                         f"📊 **MACD**: {round(last_macd, 2)} / {round(last_signal_line, 2)}"
                     )
-                    await bot.send_message(chat_id, message)
+                    await send_message_safe(bot, chat_id, message)
 
     except Exception as e:
         print(f"❌ Ошибка WebSocket: {e}")
+
+# Безопасная отправка сообщений (избегает блокировки Telegram)
+async def send_message_safe(bot, chat_id, message):
+    try:
+        await bot.send_message(chat_id, message)
+    except TelegramRetryAfter as e:
+        print(f"⚠️ Telegram просит подождать {e.retry_after} секунд. Ожидаем...")
+        await asyncio.sleep(e.retry_after)
+        await bot.send_message(chat_id, message)
+    except Exception as e:
+        print(f"❌ Ошибка отправки сообщения: {e}")
 
 # Функция расчета RSI
 def compute_rsi(prices, period=14):
