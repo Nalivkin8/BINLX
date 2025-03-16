@@ -1,14 +1,6 @@
 import websocket
 import json
 import asyncio
-from binance.client import Client
-import os
-
-# Загружаем ключи Binance
-BINANCE_API_KEY = os.getenv("BINANCE_API_KEY")
-BINANCE_SECRET_KEY = os.getenv("BINANCE_SECRET_KEY")
-
-client = Client(BINANCE_API_KEY, BINANCE_SECRET_KEY)
 
 # Подключение к WebSocket Binance
 def start_websocket(bot, chat_id):
