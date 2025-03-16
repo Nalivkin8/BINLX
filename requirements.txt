@@ -1,5 +1,4 @@
 python-binance
-websocket-client
-pandas
 aiogram
-numpy
+pandas
+websocket-client
