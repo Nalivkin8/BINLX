@@ -143,3 +143,21 @@ async def process_futures_message(bot, chat_id, message):
 
     except Exception as e:
         print(f"❌ Ошибка WebSocket: {e}")
+
+# **Функции расчёта индикаторов**
+def compute_atr(df, period=14):
+    df['high'] = df['close'].shift(1)
+    df['low'] = df['close'].shift(-1)
+    tr = abs(df['high'] - df['low'])
+    atr = tr.rolling(window=period).mean()
+    return atr.iloc[-1]
+
+def compute_support_resistance(df, period=50):
+    support = df['close'].rolling(window=period).min()
+    resistance = df['close'].rolling(window=period).max()
+    return support, resistance
+
+def compute_rsi(prices, period=14):
+    return 100 - (100 / (1 + (prices.diff().where(prices.diff() > 0, 0).rolling(window=period).mean() /
+                             (-prices.diff().where(prices.diff() < 0, 0).rolling(window=period).mean()))))
+
