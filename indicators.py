@@ -1,53 +1,42 @@
 import pandas as pd
 import requests
 
+# Получение исторических данных через Binance API
 def get_historical_data(symbol, interval='1h', limit=100):
     url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
-    data = requests.get(url).json()
+    response = requests.get(url)
+    
+    if response.status_code != 200:
+        print(f"❌ Ошибка Binance API: {response.status_code}")
+        return pd.DataFrame()
+
+    data = response.json()
+    
+    if not data:
+        print("❌ Binance API вернул пустой массив!")
+        return pd.DataFrame()
     
     df = pd.DataFrame(data, columns=['time', 'open', 'high', 'low', 'close', 'volume', '_', '_', '_', '_', '_', '_'])
     df['close'] = df['close'].astype(float)
     return df
 
+# Рассчет индикаторов
 def compute_indicators(df):
     df['SMA_50'] = df['close'].rolling(window=50).mean()
-    df['SMA_200'] = df['close'].rolling(window=200).mean()
-
-    delta = df['close'].diff(1)
-    gain = delta.where(delta > 0, 0)
-    loss = -delta.where(delta < 0, 0)
-
-    avg_gain = gain.rolling(window=14).mean()
-    avg_loss = loss.rolling(window=14).mean()
-    rs = avg_gain / avg_loss
-    df['RSI'] = 100 - (100 / (1 + rs))
-
+    df['RSI'] = 100 - (100 / (1 + df['close'].pct_change().rolling(window=14).mean()))
     df['MACD'] = df['close'].ewm(span=12, adjust=False).mean() - df['close'].ewm(span=26, adjust=False).mean()
-    df['Signal_Line'] = df['MACD'].ewm(span=9, adjust=False).mean()
-    
     return df
 
+# Генерация торговых сигналов
 def generate_signal(df):
     if df.empty:
-        print("⚠️ Ошибка: DataFrame пустой! Данные не загружены.")
-        return None, None  # Возвращаем None, если данных нет
+        return None, None
 
     last_row = df.iloc[-1]
 
-    buy_signal = (
-        last_row['close'] > last_row['SMA_50'] and
-        last_row['MACD'] > last_row['Signal_Line'] and
-        last_row['RSI'] < 30
-    )
-
-    sell_signal = (
-        last_row['close'] < last_row['SMA_50'] and
-        last_row['MACD'] < last_row['Signal_Line'] and
-        last_row['RSI'] > 70
-    )
-
-    if buy_signal:
+    if last_row['close'] > last_row['SMA_50'] and last_row['RSI'] < 30:
         return "BUY", last_row['close']
-    elif sell_signal:
+    elif last_row['close'] < last_row['SMA_50'] and last_row['RSI'] > 70:
         return "SELL", last_row['close']
+    
     return None, None
