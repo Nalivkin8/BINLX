@@ -89,8 +89,9 @@ async def process_futures_message(bot, chat_id, message):
                 signal = None
                 if (
                     last_macd > last_signal_line
+                    and last_macd - last_signal_line > 0.005  # БЫЛО 0.01, теперь быстрее даёт сигнал
                     and last_adx > 8  
-                    and 40 <= last_rsi <= 60  
+                    and last_rsi >= 55  # БЫЛО 50, теперь даёт сигнал раньше
                     and trend == "Bullish"  
                     and price > df['EMA_50'].iloc[-1]  
                 ):  
@@ -98,8 +99,9 @@ async def process_futures_message(bot, chat_id, message):
 
                 elif (
                     last_macd < last_signal_line
+                    and last_signal_line - last_macd > 0.005  # Аналогично для SHORT
                     and last_adx > 8  
-                    and 40 <= last_rsi <= 60  
+                    and last_rsi <= 55  
                     and trend == "Bearish"
                     and price < df['EMA_50'].iloc[-1]  
                 ):  
@@ -132,39 +134,3 @@ async def process_futures_message(bot, chat_id, message):
 
     except Exception as e:
         print(f"❌ Ошибка WebSocket: {e}")
-
-# **Функции расчета индикаторов**
-def compute_atr(df, period=14):
-    df['high'] = df['close'].shift(1)
-    df['low'] = df['close'].shift(-1)
-    tr = abs(df['high'] - df['low'])
-    atr = tr.rolling(window=period).mean()
-    return atr.iloc[-1]
-
-def compute_support_resistance(df, period=50):
-    support = df['close'].rolling(window=period).min()
-    resistance = df['close'].rolling(window=period).max()
-    return support, resistance
-
-def compute_rsi(prices, period=14):
-    delta = prices.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-    rs = gain / loss
-    rsi = 100 - (100 / (1 + rs))
-    return rsi
-
-def compute_macd(prices, short_window=12, long_window=26, signal_window=9):
-    short_ema = prices.ewm(span=short_window, adjust=False).mean()
-    long_ema = prices.ewm(span=long_window, adjust=False).mean()
-    macd = short_ema - long_ema
-    signal_line = macd.ewm(span=signal_window, adjust=False).mean()
-    return macd, signal_line
-
-def compute_adx(df, period=14):
-    df['high'] = df['close'].shift(1)
-    df['low'] = df['close'].shift(-1)
-    tr = abs(df['high'] - df['low'])
-    atr = tr.rolling(window=period).mean()
-    adx = (atr / atr.max()) * 100
-    return adx
