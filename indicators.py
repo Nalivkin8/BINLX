@@ -28,10 +28,23 @@ def compute_indicators(df):
     return df
 
 def generate_signal(df):
+    if df.empty:
+        print("⚠️ Ошибка: DataFrame пустой! Данные не загружены.")
+        return None, None  # Возвращаем None, если данных нет
+
     last_row = df.iloc[-1]
 
-    buy_signal = (last_row['close'] > last_row['SMA_50'] and last_row['MACD'] > last_row['Signal_Line'] and last_row['RSI'] < 30)
-    sell_signal = (last_row['close'] < last_row['SMA_50'] and last_row['MACD'] < last_row['Signal_Line'] and last_row['RSI'] > 70)
+    buy_signal = (
+        last_row['close'] > last_row['SMA_50'] and
+        last_row['MACD'] > last_row['Signal_Line'] and
+        last_row['RSI'] < 30
+    )
+
+    sell_signal = (
+        last_row['close'] < last_row['SMA_50'] and
+        last_row['MACD'] < last_row['Signal_Line'] and
+        last_row['RSI'] > 70
+    )
 
     if buy_signal:
         return "BUY", last_row['close']
