@@ -78,7 +78,7 @@ async def process_futures_message(bot, chat_id, message):
                 elif df['EMA_50'].iloc[-1] < df['EMA_200'].iloc[-1]:
                     trend = "Bearish"
 
-                last_atr = df['ATR'].iloc[-1]
+                last_atr = min(compute_atr(df), 0.5)  # Ограничиваем ATR макс. 0.5
                 last_support = df['Support'].iloc[-1]
                 last_resistance = df['Resistance'].iloc[-1]
                 last_rsi = df['RSI'].iloc[-1]
@@ -107,23 +107,13 @@ async def process_futures_message(bot, chat_id, message):
                 ):  
                     signal = "SHORT"
 
-                # **Обновление логики RSI**
-                if signal == "LONG" and last_rsi > 70:
-                    if last_rsi > 75 and last_macd < last_signal_line:  
-                        signal = None  # LONG запрещён, если RSI > 75 и MACD не подтверждает
-
-                if signal == "SHORT" and last_rsi < 30:
-                    if last_rsi < 25 and last_macd > last_signal_line:
-                        signal = None  # SHORT запрещён, если RSI < 25 и MACD не подтверждает
-
-                # **Динамический TP и SL на основе ATR**
+                # **Гибкие TP и SL (адаптация к ATR)**
                 if signal:
-                    atr = last_atr  
-                    tp_multiplier = 3 if atr > 0.5 else 2  
-                    sl_multiplier = 1.5 if atr > 0.5 else 1  
+                    tp_multiplier = 2.5 if last_atr > 0.3 else 1.5  
+                    sl_multiplier = 1.8 if last_atr > 0.3 else 1.2  
 
-                    tp = round(price + (atr * tp_multiplier), 2) if signal == "LONG" else round(price - (atr * tp_multiplier), 2)
-                    sl = round(price - (atr * sl_multiplier), 2) if signal == "LONG" else round(price + (atr * sl_multiplier), 2)
+                    tp = round(price + (last_atr * tp_multiplier), 2) if signal == "LONG" else round(price - (last_atr * tp_multiplier), 2)
+                    sl = round(price - (last_atr * sl_multiplier), 2) if signal == "LONG" else round(price + (last_atr * sl_multiplier), 2)
 
                     active_trades[symbol] = {"signal": signal, "entry": price, "tp": tp, "sl": sl}
 
@@ -161,3 +151,9 @@ def compute_rsi(prices, period=14):
     return 100 - (100 / (1 + (prices.diff().where(prices.diff() > 0, 0).rolling(window=period).mean() /
                              (-prices.diff().where(prices.diff() < 0, 0).rolling(window=period).mean()))))
 
+def compute_macd(prices, short_window=12, long_window=26, signal_window=9):
+    short_ema = prices.ewm(span=short_window, adjust=False).mean()
+    long_ema = prices.ewm(span=long_window, adjust=False).mean()
+    macd = short_ema - long_ema
+    signal_line = macd.ewm(span=signal_window, adjust=False).mean()
+    return macd.iloc[-1], signal_line.iloc[-1]
