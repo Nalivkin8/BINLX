@@ -1,23 +1,45 @@
 import os
 import asyncio
 from aiogram import Bot, Dispatcher
-from aiogram.types import Message
 from indicators import get_historical_data, compute_indicators, generate_signal
 from websocket_listener import start_websocket
+from binance.client import Client
 
-# Загружаем переменные окружения (Railway Variables)
+# Загружаем ключи Binance из Railway Variables
+BINANCE_API_KEY = os.getenv("BINANCE_API_KEY")
+BINANCE_SECRET_KEY = os.getenv("BINANCE_SECRET_KEY")
+
+# Загружаем ключи Telegram
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+
+# Подключение к Binance API
+client = Client(BINANCE_API_KEY, BINANCE_SECRET_KEY)
 
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
 dp = Dispatcher()
 
-# Функция для отправки сигналов
+# Отправка сигналов в Telegram
 async def send_signal(signal, price):
     message = f"📌 **Сигнал на {signal} BTC/USDT**\n🔹 **Цена**: {price} USDT"
     await bot.send_message(chat_id=CHAT_ID, text=message, parse_mode="Markdown")
 
-# Функция для анализа рынка (каждую минуту)
+# Получение баланса USDT
+def get_balance():
+    balance = client.get_asset_balance(asset='USDT')
+    return float(balance['free']) if balance else 0.0
+
+# Размещение ордера на покупку/продажу
+def place_order(symbol, side, quantity):
+    order = client.create_order(
+        symbol=symbol,
+        side=side,
+        type='MARKET',
+        quantity=quantity
+    )
+    return order
+
+# Анализ рынка и отправка сигналов
 async def check_market():
     while True:
         df = get_historical_data("BTCUSDT")
@@ -28,6 +50,14 @@ async def check_market():
             signal, price = generate_signal(df)
             if signal:
                 await send_signal(signal, price)
+
+                # Пример авто-торговли (можно выключить)
+                balance = get_balance()
+                if balance > 10:  # Если баланс > $10, пробуем войти в сделку
+                    qty = round(10 / price, 6)  # Количество BTC на $10
+                    order = place_order("BTCUSDT", "BUY" if signal == "BUY" else "SELL", qty)
+                    print(f"🚀 Сделка выполнена: {order}")
+
         await asyncio.sleep(60)  # Проверка рынка каждую минуту
 
 async def main():
