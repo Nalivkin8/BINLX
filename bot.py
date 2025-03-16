@@ -22,13 +22,18 @@ async def send_signal(signal, price):
 async def check_market():
     while True:
         df = get_historical_data("BTCUSDT")
-        df = compute_indicators(df)
-        signal, price = generate_signal(df)
 
-        if signal:
-            await send_signal(signal, price)
+        if df.empty:
+            print("⚠️ Ошибка: Binance API вернул пустые данные!")
+        else:
+            df = compute_indicators(df)
+            signal, price = generate_signal(df)
 
-        await asyncio.sleep(60)  # Запуск анализа каждую минуту
+            if signal:
+                await send_signal(signal, price)
+
+        await asyncio.sleep(60)  # Проверка рынка каждую минуту
+
 
 # Команда /start
 @router.message()
