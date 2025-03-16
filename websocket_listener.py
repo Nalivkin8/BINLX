@@ -105,3 +105,11 @@ async def process_futures_message(bot, chat_id, message):
 
     except Exception as e:
         print(f"❌ Ошибка WebSocket: {e}")
+
+# Функция расчета ATR
+def compute_atr(df, period=14):
+    df['high'] = df['close'].shift(1)
+    df['low'] = df['close'].shift(-1)
+    df['tr'] = abs(df['high'] - df['low'])
+    df['ATR'] = df['tr'].rolling(window=period).mean()
+    return df['ATR'].iloc[-1] if not df['ATR'].empty else 0.2  
