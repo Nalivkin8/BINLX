@@ -107,9 +107,9 @@ async def process_futures_message(bot, chat_id, message):
 
                 # **Динамический TP и SL на основе ATR**
                 if signal:
-                    atr = last_atr  # Используем текущий ATR для расчета
-                    tp_multiplier = 3 if atr > 0.5 else 2  # Если волатильность высокая → TP больше
-                    sl_multiplier = 1.5 if atr > 0.5 else 1  # Если волатильность высокая → SL больше
+                    atr = last_atr  
+                    tp_multiplier = 3 if atr > 0.5 else 2  
+                    sl_multiplier = 1.5 if atr > 0.5 else 1  
 
                     tp = round(price + (atr * tp_multiplier), 2) if signal == "LONG" else round(price - (atr * tp_multiplier), 2)
                     sl = round(price - (atr * sl_multiplier), 2) if signal == "LONG" else round(price + (atr * sl_multiplier), 2)
@@ -132,3 +132,39 @@ async def process_futures_message(bot, chat_id, message):
 
     except Exception as e:
         print(f"❌ Ошибка WebSocket: {e}")
+
+# **Функции расчета индикаторов**
+def compute_atr(df, period=14):
+    df['high'] = df['close'].shift(1)
+    df['low'] = df['close'].shift(-1)
+    tr = abs(df['high'] - df['low'])
+    atr = tr.rolling(window=period).mean()
+    return atr.iloc[-1]
+
+def compute_support_resistance(df, period=50):
+    support = df['close'].rolling(window=period).min()
+    resistance = df['close'].rolling(window=period).max()
+    return support, resistance
+
+def compute_rsi(prices, period=14):
+    delta = prices.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
+
+def compute_macd(prices, short_window=12, long_window=26, signal_window=9):
+    short_ema = prices.ewm(span=short_window, adjust=False).mean()
+    long_ema = prices.ewm(span=long_window, adjust=False).mean()
+    macd = short_ema - long_ema
+    signal_line = macd.ewm(span=signal_window, adjust=False).mean()
+    return macd, signal_line
+
+def compute_adx(df, period=14):
+    df['high'] = df['close'].shift(1)
+    df['low'] = df['close'].shift(-1)
+    tr = abs(df['high'] - df['low'])
+    atr = tr.rolling(window=period).mean()
+    adx = (atr / atr.max()) * 100
+    return adx
