@@ -78,7 +78,7 @@ async def process_futures_message(bot, chat_id, message):
                 elif df['EMA_50'].iloc[-1] < df['EMA_200'].iloc[-1]:
                     trend = "Bearish"
 
-                last_atr = min(compute_atr(df), 0.5)  # Ограничиваем ATR макс. 0.5
+                last_atr = min(compute_atr(df), 0.5)
                 last_support = df['Support'].iloc[-1]
                 last_resistance = df['Resistance'].iloc[-1]
                 last_rsi = df['RSI'].iloc[-1]
@@ -107,7 +107,6 @@ async def process_futures_message(bot, chat_id, message):
                 ):  
                     signal = "SHORT"
 
-                # **Гибкие TP и SL (адаптация к ATR)**
                 if signal:
                     tp_multiplier = 2.5 if last_atr > 0.3 else 1.5  
                     sl_multiplier = 1.8 if last_atr > 0.3 else 1.2  
@@ -157,3 +156,7 @@ def compute_macd(prices, short_window=12, long_window=26, signal_window=9):
     macd = short_ema - long_ema
     signal_line = macd.ewm(span=signal_window, adjust=False).mean()
     return macd.iloc[-1], signal_line.iloc[-1]
+
+def compute_adx(df, period=14):
+    adx = (df['ATR'] / df['ATR'].max()) * 100  
+    return adx.iloc[-1]
