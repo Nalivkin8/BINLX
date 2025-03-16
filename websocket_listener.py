@@ -72,6 +72,21 @@ async def process_futures_message(bot, chat_id, message):
                 df['MACD'], df['Signal_Line'] = compute_macd(df['close'])
                 df['ADX'] = compute_adx(df)
 
+                # Рассчитываем скользящие средние
+                df['SMA_20'] = df['close'].rolling(window=20).mean()
+                df['SMA_50'] = df['close'].rolling(window=50).mean()
+                df['EMA_9'] = df['close'].ewm(span=9, adjust=False).mean()
+                df['EMA_21'] = df['close'].ewm(span=21, adjust=False).mean()
+                df['EMA_50'] = df['close'].ewm(span=50, adjust=False).mean()
+                df['EMA_200'] = df['close'].ewm(span=200, adjust=False).mean()
+
+                # Определяем тренд по EMA 50 / 200
+                trend = "Neutral"
+                if df['EMA_50'].iloc[-1] > df['EMA_200'].iloc[-1]:
+                    trend = "Bullish"
+                elif df['EMA_50'].iloc[-1] < df['EMA_200'].iloc[-1]:
+                    trend = "Bearish"
+
                 last_atr = df['ATR'].iloc[-1]
                 last_support = df['Support'].iloc[-1]
                 last_resistance = df['Resistance'].iloc[-1]
@@ -83,17 +98,21 @@ async def process_futures_message(bot, chat_id, message):
                 signal = None
                 if (
                     last_macd > last_signal_line
-                    and last_adx > 15
-                    and last_atr > 0.1
+                    and last_adx > 10
                     and (last_rsi < 40 or (last_rsi < 50 and last_adx < 20))
+                    and trend == "Bullish"  
+                    and (df['EMA_9'].iloc[-1] > df['EMA_21'].iloc[-1])  
+                    and (price > df['SMA_20'].iloc[-1])  
                 ):  
                     signal = "LONG"
 
                 elif (
                     last_macd < last_signal_line
-                    and last_adx > 15
-                    and last_atr > 0.1
+                    and last_adx > 10
                     and (last_rsi > 60 or (last_rsi > 75 and last_adx < 20))
+                    and trend == "Bearish"
+                    and (df['EMA_9'].iloc[-1] < df['EMA_21'].iloc[-1])  
+                    and (price < df['SMA_20'].iloc[-1])  
                 ):  
                     signal = "SHORT"
 
@@ -119,51 +138,3 @@ async def process_futures_message(bot, chat_id, message):
 
     except Exception as e:
         print(f"❌ Ошибка WebSocket: {e}")
-
-# Безопасная отправка сообщений в Telegram
-async def send_message_safe(bot, chat_id, message):
-    try:
-        print(f"📤 Отправка сообщения: {message}")
-        await bot.send_message(chat_id, message)
-    except TelegramRetryAfter as e:
-        print(f"⏳ Telegram ограничил отправку, ждем {e.retry_after} сек...")
-        await asyncio.sleep(e.retry_after)
-        await send_message_safe(bot, chat_id, message)
-    except Exception as e:
-        print(f"❌ Ошибка при отправке в Telegram: {e}")
-
-# Функции индикаторов
-def compute_atr(df, period=14):
-    high = df['close'].shift(1)
-    low = df['close'].shift(-1)
-    tr = abs(high - low)
-    atr = tr.rolling(window=period).mean()
-    return atr.iloc[-1]  
-
-def compute_support_resistance(df, period=50):
-    support = df['close'].rolling(window=period).min()
-    resistance = df['close'].rolling(window=period).max()
-    return support, resistance
-
-def compute_rsi(prices, period=14):
-    delta = prices.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-    rs = gain / loss
-    rsi = 100 - (100 / (1 + rs))
-    return rsi
-
-def compute_macd(prices, short_window=12, long_window=26, signal_window=9):
-    short_ema = prices.ewm(span=short_window, adjust=False).mean()
-    long_ema = prices.ewm(span=long_window, adjust=False).mean()
-    macd = short_ema - long_ema
-    signal_line = macd.ewm(span=signal_window, adjust=False).mean()
-    return macd, signal_line
-
-def compute_adx(df, period=14):
-    high = df['close'].shift(1)
-    low = df['close'].shift(-1)
-    tr = abs(high - low)
-    atr = tr.rolling(window=period).mean()
-    adx = (atr / atr.max()) * 100
-    return adx
