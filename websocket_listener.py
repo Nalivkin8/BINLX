@@ -45,11 +45,12 @@ async def process_futures_message(bot, chat_id, message):
                 last_signal_line = df['Signal_Line'].iloc[-1]
 
                 # Генерация прогноза
-                signal = None
-                if last_rsi < 30 and last_macd > last_signal_line:
-                    signal = "LONG"
-                elif last_rsi > 70 and last_macd < last_signal_line:
-                    signal = "SHORT"
+signal = None
+if last_rsi < 30 and last_macd > last_signal_line:
+    signal = "LONG"
+elif last_rsi > 70 and last_macd < last_signal_line:
+    signal = "SHORT"
+
 
                 # Отправляем сигнал только если он новый и прошло >3 минут
                 current_time = time.time()
