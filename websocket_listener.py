@@ -81,11 +81,11 @@ async def process_futures_message(bot, chat_id, message):
                     last_adx = df['ADX'].iloc[-1]
 
                     signal = None
-                    if (last_macd > last_signal_line 
+                   if (last_macd > last_signal_line 
     and last_adx > 15 
     and last_atr > 0.1
     and (last_rsi < 40 or (last_rsi < 50 and last_adx < 20))):  
-    signal = "LONG"
+    signal = "LONG"  # <-- Был неправильный отступ
 
 elif (last_macd < last_signal_line 
       and last_adx > 15 
