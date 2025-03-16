@@ -41,17 +41,14 @@ async def process_futures_message(bot, chat_id, message):
             symbol = data['s']
             price = float(data['p'])
 
-            # Проверяем активные сделки
             if symbol in active_trades:
                 trade = active_trades[symbol]
 
-                # TP достигнут → закрытие сделки
                 if (trade["signal"] == "LONG" and price >= trade["tp"]) or (trade["signal"] == "SHORT" and price <= trade["tp"]):
                     print(f"🎯 {symbol} достиг Take Profit ({trade['tp']} USDT)")
                     await bot.send_message(chat_id, f"🎯 **{symbol} достиг Take Profit ({trade['tp']} USDT)**")
                     del active_trades[symbol]
 
-                # SL достигнут → закрытие сделки
                 elif (trade["signal"] == "LONG" and price <= trade["sl"]) or (trade["signal"] == "SHORT" and price >= trade["sl"]):
                     print(f"⛔ {symbol} достиг Stop Loss ({trade['sl']} USDT)")
                     await bot.send_message(chat_id, f"⛔ **{symbol} достиг Stop Loss ({trade['sl']} USDT)**")
@@ -72,15 +69,9 @@ async def process_futures_message(bot, chat_id, message):
                 df['MACD'], df['Signal_Line'] = compute_macd(df['close'])
                 df['ADX'] = compute_adx(df)
 
-                # Рассчитываем скользящие средние
-                df['SMA_20'] = df['close'].rolling(window=20).mean()
-                df['SMA_50'] = df['close'].rolling(window=50).mean()
-                df['EMA_9'] = df['close'].ewm(span=9, adjust=False).mean()
-                df['EMA_21'] = df['close'].ewm(span=21, adjust=False).mean()
                 df['EMA_50'] = df['close'].ewm(span=50, adjust=False).mean()
                 df['EMA_200'] = df['close'].ewm(span=200, adjust=False).mean()
 
-                # Определяем тренд по EMA 50 / 200
                 trend = "Neutral"
                 if df['EMA_50'].iloc[-1] > df['EMA_200'].iloc[-1]:
                     trend = "Bullish"
@@ -98,21 +89,19 @@ async def process_futures_message(bot, chat_id, message):
                 signal = None
                 if (
                     last_macd > last_signal_line
-                    and last_adx > 10
-                    and (last_rsi < 40 or (last_rsi < 50 and last_adx < 20))
+                    and last_adx > 10  
+                    and last_rsi < 35  
                     and trend == "Bullish"  
-                    and (df['EMA_9'].iloc[-1] > df['EMA_21'].iloc[-1])  
-                    and (price > df['SMA_20'].iloc[-1])  
+                    and price > df['EMA_50'].iloc[-1]  
                 ):  
                     signal = "LONG"
 
                 elif (
                     last_macd < last_signal_line
-                    and last_adx > 10
-                    and (last_rsi > 60 or (last_rsi > 75 and last_adx < 20))
+                    and last_adx > 10  
+                    and last_rsi > 65  
                     and trend == "Bearish"
-                    and (df['EMA_9'].iloc[-1] < df['EMA_21'].iloc[-1])  
-                    and (price < df['SMA_20'].iloc[-1])  
+                    and price < df['EMA_50'].iloc[-1]  
                 ):  
                     signal = "SHORT"
 
@@ -134,7 +123,43 @@ async def process_futures_message(bot, chat_id, message):
                         f"📊 **MACD**: {round(last_macd, 2)} / {round(last_signal_line, 2)}\n"
                         f"📊 **ADX**: {round(last_adx, 2)}"
                     )
-                    await send_message_safe(bot, chat_id, message)
+                    await bot.send_message(chat_id, message)
 
     except Exception as e:
         print(f"❌ Ошибка WebSocket: {e}")
+
+# Функции индикаторов
+def compute_atr(df, period=14):
+    df['high'] = df['close'].shift(1)
+    df['low'] = df['close'].shift(-1)
+    tr = abs(df['high'] - df['low'])
+    atr = tr.rolling(window=period).mean()
+    return atr  
+
+def compute_support_resistance(df, period=50):
+    support = df['close'].rolling(window=period).min()
+    resistance = df['close'].rolling(window=period).max()
+    return support, resistance
+
+def compute_rsi(prices, period=14):
+    delta = prices.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
+
+def compute_macd(prices, short_window=12, long_window=26, signal_window=9):
+    short_ema = prices.ewm(span=short_window, adjust=False).mean()
+    long_ema = prices.ewm(span=long_window, adjust=False).mean()
+    macd = short_ema - long_ema
+    signal_line = macd.ewm(span=signal_window, adjust=False).mean()
+    return macd, signal_line
+
+def compute_adx(df, period=14):
+    df['high'] = df['close'].shift(1)
+    df['low'] = df['close'].shift(-1)
+    tr = abs(df['high'] - df['low'])
+    atr = tr.rolling(window=period).mean()
+    adx = (atr / atr.max()) * 100
+    return adx
