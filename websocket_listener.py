@@ -29,6 +29,23 @@ def on_open(ws):
     ws.send(subscribe_message)
     print("✅ Подключено к WebSocket Binance Futures")
 
+# Рассчитываем динамический SL
+def calculate_dynamic_sl(entry_price, df, signal):
+    last_atr = df["ATR"].iloc[-1]
+    last_support = df["Support"].iloc[-1]
+    last_resistance = df["Resistance"].iloc[-1]
+
+    # ATR SL
+    atr_sl = entry_price - last_atr * 1.5 if signal == "LONG" else entry_price + last_atr * 1.5
+
+    # Проверяем уровни поддержки/сопротивления
+    if signal == "LONG":
+        sl = max(atr_sl, last_support)  # Используем ближайшую поддержку, если она выше ATR
+    else:
+        sl = min(atr_sl, last_resistance)  # Используем ближайшее сопротивление, если оно ниже ATR
+
+    return round(sl, 6)
+
 # Обрабатываем сообщения WebSocket
 async def process_futures_message(bot, chat_id, message):
     global active_trades, price_history
@@ -86,7 +103,7 @@ async def process_futures_message(bot, chat_id, message):
     
                     if signal:
                         tp = round(last_resistance, 2) if signal == "LONG" else round(last_support, 2)
-                        sl = round(price - last_atr, 2) if signal == "LONG" else round(price + last_atr, 2)
+                        sl = calculate_dynamic_sl(price, df, signal)  # Теперь SL рассчитывается динамически
 
                         active_trades[symbol] = {"signal": signal, "entry": price, "tp": tp, "sl": sl}
                         
@@ -145,4 +162,3 @@ def compute_macd(prices, short_window=12, long_window=26, signal_window=9):
 
 def compute_adx(df, period=14):
     return df['close'].rolling(window=period).mean()
-
