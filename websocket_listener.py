@@ -8,8 +8,8 @@ from aiogram.exceptions import TelegramRetryAfter
 # Храним активные сделки и Stop Loss
 active_trades = {}
 price_history = {"TSTUSDT": [], "IPUSDT": [], "ADAUSDT": []}  
-reached_sl = {}  # {"TSTUSDT": True, "ADAUSDT": False}
-latest_prices = {}  # Хранение последней цены для каждой пары
+reached_sl = {}  
+latest_prices = {}
 
 # Подключение к WebSocket Binance Futures
 async def start_futures_websocket(bot, chat_id):
@@ -21,7 +21,7 @@ async def start_futures_websocket(bot, chat_id):
     )
     await asyncio.to_thread(ws.run_forever)
 
-# Функция обработки событий при подключении к WebSocket
+# Подписка на пары
 def on_open(ws):
     subscribe_message = json.dumps({
         "method": "SUBSCRIBE",
@@ -42,8 +42,9 @@ async def process_futures_message(bot, chat_id, message):
             if price <= 0:
                 return  
 
-            latest_prices[symbol] = price  # Обновляем актуальную цену
+            latest_prices[symbol] = price  
 
+            # Проверяем активные сделки
             if symbol in active_trades:
                 trade = active_trades[symbol]
 
@@ -60,6 +61,7 @@ async def process_futures_message(bot, chat_id, message):
 
                 return  
 
+            # Обновляем историю цены
             if symbol in price_history:
                 price_history[symbol].append(price)
 
@@ -69,8 +71,9 @@ async def process_futures_message(bot, chat_id, message):
                 df = pd.DataFrame(price_history[symbol], columns=['close'])
                 df['ATR'] = compute_atr(df)
 
-                last_atr = max(min(compute_atr(df), 0.5), 0.2)  
+                last_atr = compute_atr(df)  
 
+                # Определение сигнала
                 signal = None
                 if price > df['close'].rolling(10).mean().iloc[-1]:
                     signal = "LONG"
@@ -78,8 +81,9 @@ async def process_futures_message(bot, chat_id, message):
                     signal = "SHORT"
 
                 if signal:
-                    tp_percentage = 1.5 if last_atr > 0.3 else 1.0  
-                    sl_percentage = 0.8 if last_atr > 0.3 else 0.5  
+                    # **Динамический % TP и SL по ATR**
+                    tp_percentage = round(10 + (last_atr * 20), 1)  # Может быть 10-20%
+                    sl_percentage = round(5 + (last_atr * 10), 1)  # Может быть 5-10%
 
                     tp = round(price * (1 + tp_percentage / 100), 6) if signal == "LONG" else round(price * (1 - tp_percentage / 100), 6)
                     sl = round(price * (1 - sl_percentage / 100), 6) if signal == "LONG" else round(price * (1 + sl_percentage / 100), 6)
@@ -106,7 +110,7 @@ async def process_futures_message(bot, chat_id, message):
     except Exception as e:
         print(f"❌ Ошибка WebSocket: {e}")
 
-# Функция расчета ATR
+# Функция расчёта ATR
 def compute_atr(df, period=14):
     df['high'] = df['close'].shift(1)
     df['low'] = df['close'].shift(-1)
