@@ -3,34 +3,50 @@ import json
 import asyncio
 import pandas as pd
 import time
+import os
+from aiogram import Bot, Dispatcher, types
+from aiogram.types import Message
 from aiogram.exceptions import TelegramRetryAfter
+
+# Загружаем переменные среды из Railway Variables
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")  # Обязательно добавь в Railway
+if not TELEGRAM_CHAT_ID:
+    raise ValueError("❌ Ошибка: TELEGRAM_CHAT_ID не задан в Railway Variables!")
+
+# Создаём бота и диспетчер
+bot = Bot(token=TELEGRAM_TOKEN)
+dp = Dispatcher()
 
 # Храним активные сделки
 active_trades = {}  
 price_history = {"TSTUSDT": [], "IPUSDT": [], "ADAUSDT": []}
 
-# Подключение к WebSocket Binance Futures
-async def start_futures_websocket(bot, chat_id):
+# 🔹 Логируем запуск WebSocket
+async def start_futures_websocket():
+    print("🔄 Запуск WebSocket...")
     loop = asyncio.get_event_loop()
     ws = websocket.WebSocketApp(
         "wss://fstream.binance.com/ws",
-        on_message=lambda ws, msg: loop.create_task(process_futures_message(bot, chat_id, msg)),
+        on_message=lambda ws, msg: loop.create_task(process_futures_message(msg)),
         on_open=on_open  
     )
+    print("⏳ Ожидание подключения к WebSocket...")
     await asyncio.to_thread(ws.run_forever)
 
-# Функция обработки событий при подключении к WebSocket
+# 🔹 Подписка на пары Binance
 def on_open(ws):
+    print("✅ Успешное подключение к WebSocket!")
     subscribe_message = json.dumps({
         "method": "SUBSCRIBE",
         "params": ["tstusdt@trade", "ipusdt@trade", "adausdt@trade"],
         "id": 1
     })
     ws.send(subscribe_message)
-    print("✅ Подключено к WebSocket Binance Futures")
+    print("📩 Отправлен запрос на подписку к Binance Futures")
 
-# Обрабатываем сообщения WebSocket
-async def process_futures_message(bot, chat_id, message):
+# 🔹 Обрабатываем входящие сообщения WebSocket
+async def process_futures_message(message):
     global active_trades, price_history
     try:
         data = json.loads(message)
@@ -38,19 +54,20 @@ async def process_futures_message(bot, chat_id, message):
         if 's' in data and 'p' in data:
             symbol = data['s']
             price = float(data['p'])
+            print(f"📊 Получено обновление цены {symbol}: {price} USDT")
 
-            # Проверяем активные сделки
+            # Проверяем TP/SL
             if symbol in active_trades:
                 trade = active_trades[symbol]
 
-                # TP достигнут → закрытие сделки
                 if (trade["signal"] == "LONG" and price >= trade["tp"]) or (trade["signal"] == "SHORT" and price <= trade["tp"]):
-                    await send_message_safe(bot, chat_id, f"🎯 **{symbol} достиг Take Profit ({trade['tp']} USDT)**")
+                    print(f"🎯 {symbol} достиг Take Profit ({trade['tp']} USDT)")
+                    await send_message_safe(f"🎯 **{symbol} достиг Take Profit ({trade['tp']} USDT)**")
                     del active_trades[symbol]
 
-                # SL достигнут → закрытие сделки
                 elif (trade["signal"] == "LONG" and price <= trade["sl"]) or (trade["signal"] == "SHORT" and price >= trade["sl"]):
-                    await send_message_safe(bot, chat_id, f"⛔ **{symbol} достиг Stop Loss ({trade['sl']} USDT)**")
+                    print(f"⛔ {symbol} достиг Stop Loss ({trade['sl']} USDT)")
+                    await send_message_safe(f"⛔ **{symbol} достиг Stop Loss ({trade['sl']} USDT)**")
                     del active_trades[symbol]
 
                 return  
@@ -78,7 +95,6 @@ async def process_futures_message(bot, chat_id, message):
                         signal = "SHORT"
 
                     if signal:
-                        # **Гибкие TP и SL**
                         tp_percent = min(10 + last_atr * 2.5, 30) / 100  
                         sl_percent = min(5 + last_atr * 1.8, 15) / 100  
 
@@ -95,24 +111,24 @@ async def process_futures_message(bot, chat_id, message):
                             f"🎯 **TP**: {tp} USDT | {round(tp_percent * 100, 1)}%\n"
                             f"⛔ **SL**: {sl} USDT | {round(sl_percent * 100, 1)}%"
                         )
-                        await send_message_safe(bot, chat_id, message)
+                        await send_message_safe(message)
 
     except Exception as e:
         print(f"❌ Ошибка WebSocket: {e}")
 
-# **Безопасная отправка сообщений в Telegram**
-async def send_message_safe(bot, chat_id, message):
+# 🔹 Отправка сообщений в Telegram
+async def send_message_safe(message):
     try:
         print(f"📤 Отправка сообщения: {message}")
-        await bot.send_message(chat_id, message)
+        await bot.send_message(TELEGRAM_CHAT_ID, message)
     except TelegramRetryAfter as e:
         print(f"⏳ Telegram ограничил отправку, ждем {e.retry_after} сек...")
         await asyncio.sleep(e.retry_after)
-        await send_message_safe(bot, chat_id, message)
+        await send_message_safe(message)
     except Exception as e:
         print(f"❌ Ошибка при отправке в Telegram: {e}")
 
-# **Функции индикаторов**
+# 🔹 Функции индикаторов
 def compute_atr(df, period=14):
     high = df['close'].rolling(window=period).max()
     low = df['close'].rolling(window=period).min()
@@ -134,3 +150,12 @@ def compute_macd(prices, short_window=12, long_window=26, signal_window=9):
     macd = short_ema - long_ema
     signal_line = macd.ewm(span=signal_window, adjust=False).mean()
     return macd, signal_line
+
+# 🔹 Запуск WebSocket и бота
+async def main():
+    print("🚀 Запуск бота и WebSocket...")
+    asyncio.create_task(start_futures_websocket())  # Запуск WebSocket
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
