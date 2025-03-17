@@ -1,55 +1,65 @@
 import requests
+import time
 import hmac
 import hashlib
-import time
 import os
+import json
+from urllib.parse import urlencode
 
-BINANCE_API_KEY = os.getenv("BINANCE_API_KEY")
-BINANCE_SECRET_KEY = os.getenv("BINANCE_SECRET_KEY")
+# Загружаем API-ключи из переменных среды
+API_KEY = os.getenv("BINANCE_API_KEY")
+API_SECRET = os.getenv("BINANCE_SECRET_KEY")
 
-BASE_URL = "https://fapi.binance.com"  # Binance Futures API
+# URL Binance Futures API
+BASE_URL = "https://fapi.binance.com"
 
-# Функция подписи запроса
+# Функция для подписи запроса
 def sign_request(params):
-    query_string = '&'.join([f"{key}={params[key]}" for key in sorted(params)])
-    signature = hmac.new(BINANCE_SECRET_KEY.encode(), query_string.encode(), hashlib.sha256).hexdigest()
-    params['signature'] = signature
+    query_string = urlencode(params)
+    signature = hmac.new(API_SECRET.encode(), query_string.encode(), hashlib.sha256).hexdigest()
+    params["signature"] = signature
     return params
 
-# Получение баланса
+# Функция для запроса к API Binance
+def send_signed_request(method, endpoint, params=None):
+    headers = {
+        "X-MBX-APIKEY": API_KEY
+    }
+    params = params or {}
+    params["timestamp"] = int(time.time() * 1000)
+    params = sign_request(params)
+
+    if method == "GET":
+        response = requests.get(BASE_URL + endpoint, headers=headers, params=params)
+    else:
+        response = requests.post(BASE_URL + endpoint, headers=headers, params=params)
+
+    return response.json()
+
+# Функция для получения баланса USDT
 def get_balance():
-    endpoint = "/fapi/v2/balance"
-    params = {
-        "timestamp": int(time.time() * 1000)
-    }
-    headers = {"X-MBX-APIKEY": BINANCE_API_KEY}
-    response = requests.get(BASE_URL + endpoint, params=sign_request(params), headers=headers)
-    return response.json()
+    response = send_signed_request("GET", "/fapi/v2/balance")
+    for asset in response:
+        if asset["asset"] == "USDT":
+            return f"💰 Баланс USDT: {asset['balance']} USDT"
 
-# Получение открытых позиций
+# Функция для получения открытых позиций
 def get_open_positions():
-    endpoint = "/fapi/v2/positionRisk"
-    params = {
-        "timestamp": int(time.time() * 1000)
-    }
-    headers = {"X-MBX-APIKEY": BINANCE_API_KEY}
-    response = requests.get(BASE_URL + endpoint, params=sign_request(params), headers=headers)
-    return response.json()
+    response = send_signed_request("GET", "/fapi/v2/positionRisk")
+    positions = []
+    
+    for position in response:
+        if float(position["positionAmt"]) != 0:  # Фильтруем только активные сделки
+            positions.append(f"📊 {position['symbol']} | Кол-во: {position['positionAmt']} | PNL: {position['unRealizedProfit']} USDT")
+    
+    return "\n".join(positions) if positions else "✅ Нет открытых позиций"
 
-# Запуск API-сервера с Flask
-from flask import Flask, jsonify
-
-app = Flask(__name__)
-
-@app.route("/balance", methods=["GET"])
-def balance():
-    balance_data = get_balance()
-    return jsonify(balance_data)
-
-@app.route("/positions", methods=["GET"])
-def positions():
-    positions_data = get_open_positions()
-    return jsonify(positions_data)
+# Основная функция для вывода информации
+def main():
+    balance = get_balance()
+    positions = get_open_positions()
+    print(balance)
+    print(positions)
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    main()
