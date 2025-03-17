@@ -6,7 +6,7 @@ import time
 from aiogram.exceptions import TelegramRetryAfter
 
 # Храним активные сделки
-active_trades = {}  # {"TSTUSDT": {"signal": "LONG", "entry": 5.50, "tp": 6.05, "sl": 5.23}}
+active_trades = {}
 price_history = {"TSTUSDT": [], "IPUSDT": [], "ADAUSDT": []}
 
 # Подключение к WebSocket Binance Futures
@@ -45,12 +45,12 @@ async def process_futures_message(bot, chat_id, message):
 
                 # TP достигнут → закрытие сделки
                 if (trade["signal"] == "LONG" and price >= trade["tp"]) or (trade["signal"] == "SHORT" and price <= trade["tp"]):
-                    await bot.send_message(chat_id, f"🎯 **{symbol} достиг Take Profit ({trade['tp']} USDT)**")
+                    await send_message_safe(bot, chat_id, f"🎯 **{symbol} достиг Take Profit ({trade['tp']} USDT)**")
                     del active_trades[symbol]
 
                 # SL достигнут → закрытие сделки
                 elif (trade["signal"] == "LONG" and price <= trade["sl"]) or (trade["signal"] == "SHORT" and price >= trade["sl"]):
-                    await bot.send_message(chat_id, f"⛔ **{symbol} достиг Stop Loss ({trade['sl']} USDT)**")
+                    await send_message_safe(bot, chat_id, f"⛔ **{symbol} достиг Stop Loss ({trade['sl']} USDT)**")
                     del active_trades[symbol]
 
                 return  
@@ -72,17 +72,13 @@ async def process_futures_message(bot, chat_id, message):
                     last_signal_line = df['Signal_Line'].iloc[-1]
 
                     signal = None
-                    if (
-                        last_macd > last_signal_line and last_atr > 0.1 and last_rsi < 60
-                    ):
+                    if last_macd > last_signal_line and last_atr > 0.05 and last_rsi < 55:
                         signal = "LONG"
-                    elif (
-                        last_macd < last_signal_line and last_atr > 0.1 and last_rsi > 40
-                    ):
+                    elif last_macd < last_signal_line and last_atr > 0.05 and last_rsi > 45:
                         signal = "SHORT"
 
                     if signal:
-                        # Гибкие TP и SL
+                        # **Гибкие TP и SL**
                         tp_percent = min(10 + last_atr * 2, 30) / 100  
                         sl_percent = min(5 + last_atr * 1.5, 15) / 100  
 
@@ -104,7 +100,7 @@ async def process_futures_message(bot, chat_id, message):
     except Exception as e:
         print(f"❌ Ошибка WebSocket: {e}")
 
-# Безопасная отправка сообщений в Telegram
+# **Безопасная отправка сообщений в Telegram**
 async def send_message_safe(bot, chat_id, message):
     try:
         print(f"📤 Отправка сообщения: {message}")
@@ -116,10 +112,12 @@ async def send_message_safe(bot, chat_id, message):
     except Exception as e:
         print(f"❌ Ошибка при отправке в Telegram: {e}")
 
-# Функции индикаторов
+# **Функции индикаторов**
 def compute_atr(df, period=14):
-    df['tr'] = df['close'].diff().abs()
-    atr = df['tr'].rolling(window=period).mean()
+    high = df['close'].rolling(window=period).max()
+    low = df['close'].rolling(window=period).min()
+    tr = high - low
+    atr = tr.rolling(window=period).mean()
     return atr
 
 def compute_rsi(prices, period=14):
