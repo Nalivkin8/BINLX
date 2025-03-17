@@ -6,7 +6,7 @@ import time
 from aiogram.exceptions import TelegramRetryAfter
 
 # Храним активные сделки
-active_trades = {}
+active_trades = {}  
 price_history = {"TSTUSDT": [], "IPUSDT": [], "ADAUSDT": []}
 
 # Подключение к WebSocket Binance Futures
@@ -72,15 +72,15 @@ async def process_futures_message(bot, chat_id, message):
                     last_signal_line = df['Signal_Line'].iloc[-1]
 
                     signal = None
-                    if last_macd > last_signal_line and last_atr > 0.05 and last_rsi < 55:
+                    if last_macd > last_signal_line and last_atr > 0.03 and last_rsi < 65:
                         signal = "LONG"
-                    elif last_macd < last_signal_line and last_atr > 0.05 and last_rsi > 45:
+                    elif last_macd < last_signal_line and last_atr > 0.03 and last_rsi > 35:
                         signal = "SHORT"
 
                     if signal:
                         # **Гибкие TP и SL**
-                        tp_percent = min(10 + last_atr * 2, 30) / 100  
-                        sl_percent = min(5 + last_atr * 1.5, 15) / 100  
+                        tp_percent = min(10 + last_atr * 2.5, 30) / 100  
+                        sl_percent = min(5 + last_atr * 1.8, 15) / 100  
 
                         tp = round(price * (1 + tp_percent) if signal == "LONG" else price * (1 - tp_percent), 6)
                         sl = round(price * (1 - sl_percent) if signal == "LONG" else price * (1 + sl_percent), 6)
