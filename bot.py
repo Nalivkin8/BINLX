@@ -10,7 +10,7 @@ from aiogram.exceptions import TelegramRetryAfter
 
 # Загружаем переменные среды из Railway Variables
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")  # Обязательно добавь в Railway
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")  
 if not TELEGRAM_CHAT_ID:
     raise ValueError("❌ Ошибка: TELEGRAM_CHAT_ID не задан в Railway Variables!")
 
@@ -78,40 +78,42 @@ async def process_futures_message(message):
                 if len(price_history[symbol]) > 200:
                     price_history[symbol].pop(0)
 
-                    df = pd.DataFrame(price_history[symbol], columns=['close'])
-                    df['ATR'] = compute_atr(df)
-                    df['RSI'] = compute_rsi(df['close'])
-                    df['MACD'], df['Signal_Line'] = compute_macd(df['close'])
+                df = pd.DataFrame(price_history[symbol], columns=['close'])
+                df['ATR'] = compute_atr(df)
+                df['RSI'] = compute_rsi(df['close'])
+                df['MACD'], df['Signal_Line'] = compute_macd(df['close'])
 
-                    last_atr = df['ATR'].iloc[-1]
-                    last_rsi = df['RSI'].iloc[-1]
-                    last_macd = df['MACD'].iloc[-1]
-                    last_signal_line = df['Signal_Line'].iloc[-1]
+                last_atr = df['ATR'].iloc[-1]
+                last_rsi = df['RSI'].iloc[-1]
+                last_macd = df['MACD'].iloc[-1]
+                last_signal_line = df['Signal_Line'].iloc[-1]
 
-                    signal = None
-                    if last_macd > last_signal_line and last_atr > 0.03 and last_rsi < 65:
-                        signal = "LONG"
-                    elif last_macd < last_signal_line and last_atr > 0.03 and last_rsi > 35:
-                        signal = "SHORT"
+                signal = None
+                if last_macd > last_signal_line and last_atr > 0.02 and last_rsi < 70:
+                    signal = "LONG"
+                elif last_macd < last_signal_line and last_atr > 0.02 and last_rsi > 30:
+                    signal = "SHORT"
 
-                    if signal:
-                        tp_percent = min(10 + last_atr * 2.5, 30) / 100  
-                        sl_percent = min(5 + last_atr * 1.8, 15) / 100  
+                if signal:
+                    # **Гибкий TP (от 1% до бесконечности)**
+                    tp_percent = max(1, last_atr * 5) / 100  
+                    # **Гибкий SL (от 0.5% до 20%)**
+                    sl_percent = min(0.5 + last_atr * 2.5, 20) / 100  
 
-                        tp = round(price * (1 + tp_percent) if signal == "LONG" else price * (1 - tp_percent), 6)
-                        sl = round(price * (1 - sl_percent) if signal == "LONG" else price * (1 + sl_percent), 6)
+                    tp = round(price * (1 + tp_percent) if signal == "LONG" else price * (1 - tp_percent), 6)
+                    sl = round(price * (1 - sl_percent) if signal == "LONG" else price * (1 + sl_percent), 6)
 
-                        active_trades[symbol] = {"signal": signal, "entry": price, "tp": tp, "sl": sl}
+                    active_trades[symbol] = {"signal": signal, "entry": price, "tp": tp, "sl": sl}
 
-                        signal_emoji = "🟢" if signal == "LONG" else "🔴"
+                    signal_emoji = "🟢" if signal == "LONG" else "🔴"
 
-                        message = (
-                            f"{signal_emoji} **{signal} {symbol} (Futures)**\n"
-                            f"🔹 **Вход**: {price} USDT\n"
-                            f"🎯 **TP**: {tp} USDT | {round(tp_percent * 100, 1)}%\n"
-                            f"⛔ **SL**: {sl} USDT | {round(sl_percent * 100, 1)}%"
-                        )
-                        await send_message_safe(message)
+                    message = (
+                        f"{signal_emoji} **{signal} {symbol} (Futures)**\n"
+                        f"🔹 **Вход**: {price} USDT\n"
+                        f"🎯 **TP**: {tp} USDT | {round(tp_percent * 100, 1)}%\n"
+                        f"⛔ **SL**: {sl} USDT | {round(sl_percent * 100, 1)}%"
+                    )
+                    await send_message_safe(message)
 
     except Exception as e:
         print(f"❌ Ошибка WebSocket: {e}")
@@ -154,7 +156,7 @@ def compute_macd(prices, short_window=12, long_window=26, signal_window=9):
 # 🔹 Запуск WebSocket и бота
 async def main():
     print("🚀 Запуск бота и WebSocket...")
-    asyncio.create_task(start_futures_websocket())  # Запуск WebSocket
+    asyncio.create_task(start_futures_websocket())  
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
