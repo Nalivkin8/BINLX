@@ -29,23 +29,6 @@ def on_open(ws):
     ws.send(subscribe_message)
     print("✅ Подключено к WebSocket Binance Futures")
 
-# Рассчитываем динамический SL
-def calculate_dynamic_sl(entry_price, df, signal):
-    last_atr = df["ATR"].iloc[-1]
-    last_support = df["Support"].iloc[-1]
-    last_resistance = df["Resistance"].iloc[-1]
-
-    # ATR SL
-    atr_sl = entry_price - last_atr * 1.5 if signal == "LONG" else entry_price + last_atr * 1.5
-
-    # Проверяем уровни поддержки/сопротивления
-    if signal == "LONG":
-        sl = max(atr_sl, last_support)  # Используем ближайшую поддержку, если она выше ATR
-    else:
-        sl = min(atr_sl, last_resistance)  # Используем ближайшее сопротивление, если оно ниже ATR
-
-    return round(sl, 6)
-
 # Обрабатываем сообщения WebSocket
 async def process_futures_message(bot, chat_id, message):
     global active_trades, price_history
@@ -82,38 +65,39 @@ async def process_futures_message(bot, chat_id, message):
 
                     df = pd.DataFrame(price_history[symbol], columns=['close'])
                     df['ATR'] = compute_atr(df)
-                    df['Support'], df['Resistance'] = compute_support_resistance(df)
                     df['RSI'] = compute_rsi(df['close'])
                     df['MACD'], df['Signal_Line'] = compute_macd(df['close'])
                     df['ADX'] = compute_adx(df)
 
                     last_atr = df['ATR'].iloc[-1]
-                    last_support = df['Support'].iloc[-1]
-                    last_resistance = df['Resistance'].iloc[-1]
                     last_rsi = df['RSI'].iloc[-1]
                     last_macd = df['MACD'].iloc[-1]
                     last_signal_line = df['Signal_Line'].iloc[-1]
                     last_adx = df['ADX'].iloc[-1]
 
+                    # Ослабленные условия входа
                     signal = None
-                    if last_macd > last_signal_line and last_adx > 15 and last_atr > 0.1 and (last_rsi < 40 or (last_rsi < 50 and last_adx < 20)):
+                    if last_macd > last_signal_line and last_atr > 0.05 and (last_rsi < 50 or last_adx < 15):
                         signal = "LONG"
-                    elif last_macd < last_signal_line and last_adx > 15 and last_atr > 0.1 and (last_rsi > 60 or (last_rsi > 75 and last_adx < 20)):
+                    elif last_macd < last_signal_line and last_atr > 0.05 and (last_rsi > 55 or last_adx < 15):
                         signal = "SHORT"
-    
+
                     if signal:
-                        tp = round(last_resistance, 2) if signal == "LONG" else round(last_support, 2)
-                        sl = calculate_dynamic_sl(price, df, signal)  # Теперь SL рассчитывается динамически
+                        tp_percent = max(3, min(15, last_atr * 100)) / 100
+                        sl_percent = max(1, min(7, last_atr * 50)) / 100
+
+                        tp = round(price * (1 + tp_percent) if signal == "LONG" else price * (1 - tp_percent), 6)
+                        sl = round(price * (1 - sl_percent) if signal == "LONG" else price * (1 + sl_percent), 6)
 
                         active_trades[symbol] = {"signal": signal, "entry": price, "tp": tp, "sl": sl}
-                        
+
                         print(f"📢 Генерация сигнала: {signal} {symbol}, Цена входа: {price}")
                         
                         message = (
                             f"{'🟢' if signal == 'LONG' else '🔴'} **{signal} {symbol} (Futures)**\n"
                             f"🔹 **Вход**: {price} USDT\n"
-                            f"🎯 **TP**: {tp} USDT | {round((tp/price - 1) * 100, 1)}%\n"
-                            f"⛔ **SL**: {sl} USDT | {round((1 - sl/price) * 100, 1)}%"
+                            f"🎯 **TP**: {tp} USDT | {round(tp_percent * 100, 1)}%\n"
+                            f"⛔ **SL**: {sl} USDT | {round(sl_percent * 100, 1)}%"
                         )
                         await send_message_safe(bot, chat_id, message)
 
@@ -139,11 +123,6 @@ def compute_atr(df, period=14):
     tr = abs(high - low)
     atr = tr.rolling(window=period).mean()
     return atr.iloc[-1]  
-
-def compute_support_resistance(df, period=50):
-    support = df['close'].rolling(window=period).min()
-    resistance = df['close'].rolling(window=period).max()
-    return support, resistance
 
 def compute_rsi(prices, period=14):
     delta = prices.diff()
