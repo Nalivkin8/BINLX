@@ -17,9 +17,10 @@ if not TELEGRAM_CHAT_ID:
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
 
-# 🔹 Храним активные сделки (по парам)
-active_trades = {}
+# 🔹 Храним активные сделки
+active_trades = {}  
 price_history = {"TSTUSDT": [], "IPUSDT": [], "ADAUSDT": [], "ETHUSDT": []}
+trend_history = {}  # Хранение последнего тренда {"TSTUSDT": "LONG"}
 
 # 🔹 Запуск WebSocket
 async def start_futures_websocket():
@@ -33,7 +34,7 @@ async def start_futures_websocket():
     print("⏳ Ожидание подключения к WebSocket...")
     await asyncio.to_thread(ws.run_forever)
 
-# 🔹 Подписка на Binance Futures
+# 🔹 Подписка на свечи Binance Futures
 def on_open(ws):
     print("✅ Успешное подключение к WebSocket!")
     subscribe_message = json.dumps({
@@ -53,7 +54,7 @@ def get_decimal_places(price):
 
 # 🔹 Обрабатываем входящие данные WebSocket
 async def process_futures_message(message):
-    global active_trades, price_history
+    global active_trades, price_history, trend_history
     try:
         data = json.loads(message)
 
@@ -68,7 +69,7 @@ async def process_futures_message(message):
 
             print(f"📊 {symbol}: Текущая цена {price} USDT")
 
-            # Проверяем активные сделки
+            # Проверяем TP/SL
             if symbol in active_trades:
                 trade = active_trades[symbol]
 
@@ -84,7 +85,7 @@ async def process_futures_message(message):
                     del active_trades[symbol]
                     return
 
-            # **Фильтр сигналов** – новый сигнал даётся только после TP/SL
+            # Если по паре уже есть сделка – новые сигналы не отправляем
             if symbol in active_trades:
                 print(f"⚠️ Пропущен сигнал для {symbol} – активна сделка")
                 return
@@ -105,20 +106,23 @@ async def process_futures_message(message):
                     last_signal_line = df['Signal_Line'].iloc[-1]
 
                     signal = None
-                    if last_macd > last_signal_line and last_rsi < 50:
+                    if last_macd > last_signal_line and last_rsi < 55:
                         signal = "LONG"
-                    elif last_macd < last_signal_line and last_rsi > 50:
+                    elif last_macd < last_signal_line and last_rsi > 45:
                         signal = "SHORT"
+
+                    # Проверка смены тренда
+                    if symbol in trend_history and trend_history[symbol] != signal:
+                        print(f"⚠️ {symbol}: Тренд изменился с {trend_history[symbol]} на {signal}")
+                        await send_message_safe(f"⚠️ **Внимание! {symbol} изменил тренд с {trend_history[symbol]} на {signal}**")
+                    
+                    trend_history[symbol] = signal  
 
                     if signal:
                         decimal_places = get_decimal_places(price)
 
-                        # 🔹 Адаптивные TP и SL (основаны на волатильности)
-                        tp_multiplier = 1 + (0.03 if last_rsi < 40 else 0.02)
-                        sl_multiplier = 1 - (0.02 if last_rsi > 60 else 0.015)
-
-                        tp = round(price * tp_multiplier, decimal_places) if signal == "LONG" else round(price * (2 - tp_multiplier), decimal_places)
-                        sl = round(price * sl_multiplier, decimal_places) if signal == "LONG" else round(price * (2 - sl_multiplier), decimal_places)
+                        tp = round(price * 1.03, decimal_places) if signal == "LONG" else round(price * 0.97, decimal_places)
+                        sl = round(price * 0.99, decimal_places) if signal == "LONG" else round(price * 1.01, decimal_places)
 
                         # 🔹 Расчёт ROI
                         roi_tp = round(((tp - price) / price) * 100, 2) if signal == "LONG" else round(((price - tp) / price) * 100, 2)
@@ -166,3 +170,12 @@ def compute_macd(prices, short_window=12, long_window=26, signal_window=9):
     macd = short_ema - long_ema
     signal_line = macd.ewm(span=signal_window, adjust=False).mean()
     return macd, signal_line
+
+# 🔹 Запуск WebSocket и бота
+async def main():
+    print("🚀 Бот стартует...")
+    asyncio.create_task(start_futures_websocket())  
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
