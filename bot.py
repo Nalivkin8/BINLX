@@ -1,36 +1,29 @@
 import websocket
 import json
 import asyncio
-import pandas as pd
-import time
 import os
-import requests
 from aiogram import Bot, Dispatcher
 from aiogram.exceptions import TelegramRetryAfter
+import pandas as pd
 
 # 🔹 Загружаем переменные среды из Railway Variables
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-BINANCE_API_URL = "https://fapi.binance.com/fapi/v1/klines"
-BINANCE_API_KEY = os.getenv("BINANCE_API_KEY")  # 🔹 Новый параметр
-BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET")  # 🔹 Новый параметр
 
 if not TELEGRAM_CHAT_ID:
     raise ValueError("❌ Ошибка: TELEGRAM_CHAT_ID не задан в Railway Variables!")
-if not BINANCE_API_KEY or not BINANCE_API_SECRET:
-    raise ValueError("❌ Ошибка: Не заданы API-ключи Binance в Railway Variables!")
 
 # 🔹 Создаём бота и диспетчер
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
 
-# 🔹 Храним активные сделки и цены
+# 🔹 Храним активные сделки и историю цен
 active_trades = {}
 price_history = {"TSTUSDT": [], "IPUSDT": [], "ADAUSDT": []}
 
 # 🔹 Запуск WebSocket
 async def start_futures_websocket():
-    print("🔄 Запуск WebSocket...")
+    print("🔄 Запуск WebSocket Binance Futures...")
     loop = asyncio.get_event_loop()
     ws = websocket.WebSocketApp(
         "wss://fstream.binance.com/ws",
@@ -40,103 +33,83 @@ async def start_futures_websocket():
     print("⏳ Ожидание подключения к WebSocket...")
     await asyncio.to_thread(ws.run_forever)
 
-# 🔹 Подписка на пары Binance
+# 🔹 Подписка на свечи Binance Futures
 def on_open(ws):
     print("✅ Успешное подключение к WebSocket!")
     subscribe_message = json.dumps({
         "method": "SUBSCRIBE",
-        "params": ["tstusdt@trade", "ipusdt@trade", "adausdt@trade"],
+        "params": [
+            "tstusdt@kline_1m",
+            "ipusdt@kline_1m",
+            "adausdt@kline_1m"
+        ],
         "id": 1
     })
     ws.send(subscribe_message)
-    print("📩 Отправлен запрос на подписку к Binance Futures")
+    print("📩 Подписка на свечи Binance Futures")
 
-# 🔹 Запрос свечей с Binance API с API-ключом
-def get_candles(symbol, interval, limit=100):
-    url = f"{BINANCE_API_URL}?symbol={symbol}&interval={interval}&limit={limit}"
-    headers = {
-        "X-MBX-APIKEY": BINANCE_API_KEY  # 🔹 Добавили авторизацию по API-ключу
-    }
-    try:
-        response = requests.get(url, headers=headers, timeout=5)
-        if response.status_code == 200:
-            return response.json()
-        else:
-            print(f"❌ Ошибка Binance API: {response.status_code} - {response.text}")
-            return None
-    except requests.exceptions.RequestException as e:
-        print(f"❌ Binance API не отвечает: {e}")
-        return None
-
-# 🔹 Анализ тренда на нескольких таймфреймах
-def analyze_trend(symbol):
-    timeframes = ["1m", "15m", "30m", "1h"]
-    trend_scores = {"LONG": 0, "SHORT": 0}
-
-    for tf in timeframes:
-        print(f"📩 Запрос свечей для {symbol} на таймфрейме {tf}")
-        candles = get_candles(symbol, tf)
-        if not candles:
-            print(f"⚠️ Нет данных по {symbol} на {tf}!")
-            continue
-
-        df = pd.DataFrame(candles, columns=['time', 'open', 'high', 'low', 'close', 'volume', 'close_time', 'qav', 'trades', 'taker_base', 'taker_quote', 'ignore'])
-        df['close'] = df['close'].astype(float)
-        df['ATR'] = compute_atr(df)
-        df['RSI'] = compute_rsi(df['close'])
-        df['MACD'], df['Signal_Line'] = compute_macd(df['close'])
-
-        last_rsi = df['RSI'].iloc[-1]
-        last_macd = df['MACD'].iloc[-1]
-        last_signal_line = df['Signal_Line'].iloc[-1]
-
-        if last_macd > last_signal_line and last_rsi < 70:
-            trend_scores["LONG"] += 1
-        elif last_macd < last_signal_line and last_rsi > 30:
-            trend_scores["SHORT"] += 1
-
-    if trend_scores["LONG"] >= 3:
-        return "LONG"
-    elif trend_scores["SHORT"] >= 3:
-        return "SHORT"
-    else:
-        return None  
-
-# 🔹 Обрабатываем входящие данные WebSocket
+# 🔹 Обрабатываем входящие данные WebSocket (свечи)
 async def process_futures_message(message):
     global active_trades, price_history
     try:
         data = json.loads(message)
 
-        if 's' in data and 'p' in data:
-            symbol = data['s']
-            price = float(data['p'])
-            print(f"📊 Получено обновление цены {symbol}: {price} USDT")
+        if "k" in data:
+            candle = data["k"]
+            symbol = data["s"]
+            close_price = float(candle["c"])  # Цена закрытия
 
-            trend = analyze_trend(symbol)
-            if not trend:
-                print(f"⚠️ Сигнал отклонён: нет подтверждённого тренда для {symbol}")
-                return  
+            print(f"📊 {symbol} (1m): Закрытие {close_price} USDT")
 
-            tp = round(price * 1.05, 6) if trend == "LONG" else round(price * 0.95, 6)
-            sl = round(price * 0.98, 6) if trend == "LONG" else round(price * 1.02, 6)
+            # Добавляем цену в историю
+            if symbol not in price_history:
+                price_history[symbol] = []
+            price_history[symbol].append(close_price)
 
-            active_trades[symbol] = {"signal": trend, "entry": price, "tp": tp, "sl": sl}
-
-            signal_emoji = "🟢" if trend == "LONG" else "🔴"
-
-            message = (
-                f"{signal_emoji} **{trend} {symbol} (Futures)**\n"
-                f"🔹 **Вход**: {price} USDT\n"
-                f"🎯 **TP**: {tp} USDT\n"
-                f"⛔ **SL**: {sl} USDT"
-            )
-            await send_message_safe(message)
+            # Если данных достаточно, анализируем тренд
+            if len(price_history[symbol]) > 50:
+                trend = analyze_trend(symbol, price_history[symbol])
+                if trend:
+                    await send_trade_signal(symbol, close_price, trend)
 
     except Exception as e:
         print(f"❌ Ошибка WebSocket: {e}")
 
-# 🔹 Отправка сообщений в Telegram
+# 🔹 Анализ тренда на основе последних 50 свечей
+def analyze_trend(symbol, prices):
+    df = pd.DataFrame(prices, columns=["close"])
+    df["ATR"] = compute_atr(df)
+    df["RSI"] = compute_rsi(df["close"])
+    df["MACD"], df["Signal_Line"] = compute_macd(df["close"])
+
+    last_rsi = df["RSI"].iloc[-1]
+    last_macd = df["MACD"].iloc[-1]
+    last_signal_line = df["Signal_Line"].iloc[-1]
+
+    if last_macd > last_signal_line and last_rsi < 70:
+        return "LONG"
+    elif last_macd < last_signal_line and last_rsi > 30:
+        return "SHORT"
+    return None
+
+# 🔹 Отправка сигнала
+async def send_trade_signal(symbol, price, trend):
+    tp = round(price * 1.05, 6) if trend == "LONG" else round(price * 0.95, 6)
+    sl = round(price * 0.98, 6) if trend == "LONG" else round(price * 1.02, 6)
+
+    active_trades[symbol] = {"signal": trend, "entry": price, "tp": tp, "sl": sl}
+
+    signal_emoji = "🟢" if trend == "LONG" else "🔴"
+
+    message = (
+        f"{signal_emoji} **{trend} {symbol} (Futures)**\n"
+        f"🔹 **Вход**: {price} USDT\n"
+        f"🎯 **TP**: {tp} USDT\n"
+        f"⛔ **SL**: {sl} USDT"
+    )
+    await send_message_safe(message)
+
+# 🔹 Безопасная отправка сообщений в Telegram
 async def send_message_safe(message):
     try:
         print(f"📤 Отправка сообщения в Telegram: {message}")
@@ -147,6 +120,27 @@ async def send_message_safe(message):
         await send_message_safe(message)
     except Exception as e:
         print(f"❌ Ошибка при отправке в Telegram: {e}")
+
+# 🔹 Функции индикаторов
+def compute_atr(df, period=14):
+    df["tr"] = df["close"].diff().abs()
+    atr = df["tr"].rolling(window=period).mean()
+    return atr
+
+def compute_rsi(prices, period=14):
+    delta = prices.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
+
+def compute_macd(prices, short_window=12, long_window=26, signal_window=9):
+    short_ema = prices.ewm(span=short_window, adjust=False).mean()
+    long_ema = prices.ewm(span=long_window, adjust=False).mean()
+    macd = short_ema - long_ema
+    signal_line = macd.ewm(span=signal_window, adjust=False).mean()
+    return macd, signal_line
 
 # 🔹 Запуск WebSocket и бота
 async def main():
