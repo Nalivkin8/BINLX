@@ -125,6 +125,27 @@ def analyze_combined_trend(symbol):
         return "SHORT"
     return None
 
+# 🔹 Функции технических индикаторов
+def compute_atr(df, period=14):
+    df["tr"] = df["close"].diff().abs()
+    atr = df["tr"].rolling(window=period).mean()
+    return atr
+
+def compute_rsi(prices, period=6):  # Уменьшен период RSI для более частых сигналов
+    delta = prices.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
+
+def compute_macd(prices, short_window=9, long_window=21, signal_window=7):  # Ослаблены фильтры MACD
+    short_ema = prices.ewm(span=short_window, adjust=False).mean()
+    long_ema = prices.ewm(span=long_window, adjust=False).mean()
+    macd = short_ema - long_ema
+    signal_line = macd.ewm(span=signal_window, adjust=False).mean()
+    return macd, signal_line
+
 # 🔹 Отправка сигнала
 async def send_trade_signal(symbol, price, trend):
     tp = round(price * 1.05, 6) if trend == "LONG" else round(price * 0.95, 6)
@@ -141,18 +162,6 @@ async def send_trade_signal(symbol, price, trend):
         f"⛔ **SL**: {sl} USDT"
     )
     await send_message_safe(message)
-
-# 🔹 Безопасная отправка сообщений в Telegram
-async def send_message_safe(message):
-    try:
-        print(f"📤 Отправка сообщения в Telegram: {message}")
-        await bot.send_message(TELEGRAM_CHAT_ID, message)
-    except TelegramRetryAfter as e:
-        print(f"⏳ Telegram ограничил отправку, ждем {e.retry_after} сек...")
-        await asyncio.sleep(e.retry_after)
-        await send_message_safe(message)
-    except Exception as e:
-        print(f"❌ Ошибка при отправке в Telegram: {e}")
 
 # 🔹 Запуск WebSocket и бота
 async def main():
