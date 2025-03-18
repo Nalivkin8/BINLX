@@ -131,8 +131,8 @@ async def process_futures_message(message):
 async def send_trade_signal(symbol, price, trend):
     decimal_places = get_decimal_places(price)
 
-    tp_percent = 0.01 if trend == "LONG" else -0.01  # TP от 1%
-    sl_percent = 0.005 if trend == "LONG" else -0.005  # SL от 0.5%
+    tp_percent = 0.02 if trend == "LONG" else -0.02  # TP от 2%
+    sl_percent = 0.01 if trend == "LONG" else -0.01  # SL от 1%
 
     tp = round(price * (1 + tp_percent), decimal_places)
     sl = round(price * (1 - sl_percent), decimal_places)
@@ -153,17 +153,21 @@ async def send_trade_signal(symbol, price, trend):
     )
     await send_message_safe(message)
 
-# 🔹 Безопасная отправка сообщений в Telegram
-async def send_message_safe(message):
-    try:
-        print(f"📤 Отправка сообщения в Telegram: {message}")
-        await bot.send_message(TELEGRAM_CHAT_ID, message)
-    except TelegramRetryAfter as e:
-        print(f"⏳ Telegram ограничил отправку, ждем {e.retry_after} сек...")
-        await asyncio.sleep(e.retry_after)
-        await send_message_safe(message)
-    except Exception as e:
-        print(f"❌ Ошибка при отправке в Telegram: {e}")
+# 🔹 Функции индикаторов
+def compute_rsi(prices, period=14):
+    delta = prices.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
+
+def compute_macd(prices, short_window=12, long_window=26, signal_window=9):
+    short_ema = prices.ewm(span=short_window, adjust=False).mean()
+    long_ema = prices.ewm(span=long_window, adjust=False).mean()
+    macd = short_ema - long_ema
+    signal_line = macd.ewm(span=signal_window, adjust=False).mean()
+    return macd, signal_line
 
 # 🔹 Запуск WebSocket и бота
 async def main():
