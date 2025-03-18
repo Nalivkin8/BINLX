@@ -17,7 +17,7 @@ if not TELEGRAM_CHAT_ID:
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
 
-# 🔹 Храним историю цен и активные сигналы
+# 🔹 Храним историю цен и активные сделки
 price_history = {"TSTUSDT": [], "IPUSDT": [], "ADAUSDT": [], "ETHUSDT": []}
 active_trades = {}  # Храним открытые сигналы
 
@@ -53,7 +53,7 @@ async def process_futures_message(message):
 
             print(f"📊 {symbol}: Закрытие свечи {close_price} USDT")
 
-            # Если в истории цены есть, добавляем новую цену
+            # Добавляем цену в историю
             if symbol in price_history:
                 price_history[symbol].append(close_price)
 
@@ -81,25 +81,24 @@ async def process_futures_message(message):
                 if symbol in active_trades:
                     trade = active_trades[symbol]
 
-                    # Проверяем, достигли ли TP или SL
+                    # Проверяем TP и SL
                     if (trade["signal"] == "LONG" and close_price >= trade["tp"]) or \
                        (trade["signal"] == "SHORT" and close_price <= trade["tp"]):
                         await send_message_safe(f"✅ {symbol} достиг TP ({trade['tp']} USDT)!")
-                        del active_trades[symbol]  # Закрываем сделку
+                        del active_trades[symbol]
                         return
                     if (trade["signal"] == "LONG" and close_price <= trade["sl"]) or \
                        (trade["signal"] == "SHORT" and close_price >= trade["sl"]):
                         await send_message_safe(f"❌ {symbol} достиг SL ({trade['sl']} USDT), закрываем сделку.")
-                        del active_trades[symbol]  # Закрываем сделку
+                        del active_trades[symbol]
                         return
                     
-                    # Если сигнал ещё не достиг TP/SL, просто выходим
+                    # Если сделка активна, новые сигналы не отправляем
                     return  
 
                 # 📢 Отправляем сигнал, если нет активных сделок
                 if signal:
-                    tp = round(close_price * (1 + last_atr), 6) if signal == "LONG" else round(close_price * (1 - last_atr), 6)
-                    sl = round(close_price * (1 - last_atr * 0.5), 6) if signal == "LONG" else round(close_price * (1 + last_atr * 0.5), 6)
+                    tp, sl = compute_dynamic_tp_sl(df, close_price, signal, last_atr)
 
                     active_trades[symbol] = {"signal": signal, "entry": close_price, "tp": tp, "sl": sl}
 
@@ -127,6 +126,17 @@ async def send_message_safe(message):
     except Exception as e:
         print(f"❌ Ошибка при отправке в Telegram: {e}")
 
+# 🔹 Динамический расчет TP и SL
+def compute_dynamic_tp_sl(df, close_price, signal, atr):
+    atr_multiplier = 2  # Базовый множитель ATR
+    if df['ATR'].mean() > 0.01:
+        atr_multiplier = 3  # Если высокая волатильность, увеличиваем TP/SL
+
+    tp = close_price + atr_multiplier * atr if signal == "LONG" else close_price - atr_multiplier * atr
+    sl = close_price - atr_multiplier * 0.5 * atr if signal == "LONG" else close_price + atr_multiplier * 0.5 * atr
+
+    return round(tp, 6), round(sl, 6)
+
 # 🔹 Функции индикаторов
 def compute_atr(df, period=14):
     df['tr'] = df['close'].diff().abs().fillna(0)
@@ -136,7 +146,7 @@ def compute_rsi(prices, period=14):
     delta = prices.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-    rs = gain / loss.replace(0, 1e-9)  # Избегаем деления на 0
+    rs = gain / loss.replace(0, 1e-9)
     return 100 - (100 / (1 + rs))
 
 def compute_macd(prices, short_window=12, long_window=26, signal_window=9):
