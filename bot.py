@@ -60,6 +60,12 @@ async def process_futures_message(message):
         if 's' in data and 'p' in data:
             symbol = data['s']
             price = float(data['p'])
+
+            # 🔹 Фильтр ошибочных значений (0.0 USDT)
+            if price <= 0.0:
+                print(f"⚠️ Ошибка данных: {symbol} получил некорректную цену ({price} USDT), пропуск...")
+                return
+
             print(f"📊 {symbol}: Текущая цена {price} USDT")
 
             # Проверяем активные сделки
@@ -70,13 +76,13 @@ async def process_futures_message(message):
                     print(f"🎯 {symbol} достиг Take Profit ({trade['tp']} USDT)")
                     await send_message_safe(f"🎯 **{symbol} достиг Take Profit ({trade['tp']} USDT)**")
                     del active_trades[symbol]
+                    return
 
                 elif (trade["signal"] == "LONG" and price <= trade["sl"]) or (trade["signal"] == "SHORT" and price >= trade["sl"]):
                     print(f"⛔ {symbol} достиг Stop Loss ({trade['sl']} USDT)")
                     await send_message_safe(f"⛔ **{symbol} достиг Stop Loss ({trade['sl']} USDT)**")
                     del active_trades[symbol]
-
-                return  
+                    return
 
             # Если по паре уже есть сделка – новые сигналы не отправляем
             if symbol in active_trades:
@@ -110,6 +116,10 @@ async def process_futures_message(message):
                         tp = round(price * 1.05, decimal_places) if signal == "LONG" else round(price * 0.95, decimal_places)
                         sl = round(price * 0.98, decimal_places) if signal == "LONG" else round(price * 1.02, decimal_places)
 
+                        # 🔹 Расчёт ROI
+                        roi_tp = round(((tp - price) / price) * 100, 2) if signal == "LONG" else round(((price - tp) / price) * 100, 2)
+                        roi_sl = round(((sl - price) / price) * 100, 2) if signal == "LONG" else round(((price - sl) / price) * 100, 2)
+
                         active_trades[symbol] = {"signal": signal, "entry": price, "tp": tp, "sl": sl}
 
                         signal_emoji = "🟢" if signal == "LONG" else "🔴"
@@ -117,8 +127,8 @@ async def process_futures_message(message):
                         message = (
                             f"{signal_emoji} **{signal} {symbol} (Futures)**\n"
                             f"🔹 **Вход**: {price:.{decimal_places}f} USDT\n"
-                            f"🎯 **TP**: {tp:.{decimal_places}f} USDT\n"
-                            f"⛔ **SL**: {sl:.{decimal_places}f} USDT"
+                            f"🎯 **TP**: {tp:.{decimal_places}f} USDT | ROI: {roi_tp}%\n"
+                            f"⛔ **SL**: {sl:.{decimal_places}f} USDT | ROI: {roi_sl}%"
                         )
                         await send_message_safe(message)
 
