@@ -70,7 +70,6 @@ async def process_futures_message(message):
 
                 support, resistance = find_support_resistance(df)
 
-                last_rsi = df['RSI'].iloc[-1]
                 last_macd = df['MACD'].iloc[-1]
                 last_signal_line = df['Signal_Line'].iloc[-1]
                 last_atr = df['ATR'].iloc[-1]
@@ -82,9 +81,9 @@ async def process_futures_message(message):
 
                 # 💡 Определяем новый сигнал
                 signal = None
-                if last_macd > last_signal_line and last_rsi < 50 and close_price > df['EMA_50'].iloc[-1]:
+                if last_macd > last_signal_line and close_price > df['EMA_50'].iloc[-1]:
                     signal = "LONG"
-                elif last_macd < last_signal_line and last_rsi > 50 and close_price < df['EMA_50'].iloc[-1]:
+                elif last_macd < last_signal_line and close_price < df['EMA_50'].iloc[-1]:
                     signal = "SHORT"
 
                 # 📌 Проверка активной сделки
@@ -104,6 +103,8 @@ async def process_futures_message(message):
 
                 if signal:
                     tp, sl = compute_dynamic_tp_sl(close_price, signal, last_atr)
+                    roi = compute_roi(close_price, tp, sl)
+
                     precision = get_price_precision(close_price)
 
                     active_trades[symbol] = {
@@ -118,7 +119,7 @@ async def process_futures_message(message):
                         f"🔹 **Вход**: {close_price} USDT\n"
                         f"🎯 **TP**: {round(tp, precision)} USDT\n"
                         f"⛔ **SL**: {round(sl, precision)} USDT\n"
-                        f"📊 RSI: {round(last_rsi, 2)}, MACD: {round(last_macd, 6)}, ATR: {last_atr}, ADX: {last_adx}"
+                        f"💰 **ROI**: {roi:.2f}%"
                     )
                     await send_message_safe(message)
 
@@ -137,6 +138,12 @@ def compute_dynamic_tp_sl(close_price, signal, atr):
     tp = close_price + atr_multiplier * atr if signal == "LONG" else close_price - atr_multiplier * atr
     sl = close_price - atr_multiplier * 0.7 * atr if signal == "LONG" else close_price + atr_multiplier * 0.7 * atr
     return tp, sl
+
+# 🔹 ROI расчет
+def compute_roi(entry, tp, sl):
+    tp_roi = ((tp - entry) / entry) * 100 if tp > entry else ((entry - tp) / entry) * 100
+    sl_roi = ((sl - entry) / entry) * 100 if sl > entry else ((entry - sl) / entry) * 100
+    return (tp_roi + sl_roi) / 2  
 
 # 🔹 Определение точности цены
 def get_price_precision(price):
