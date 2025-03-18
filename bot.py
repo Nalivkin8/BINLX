@@ -19,7 +19,11 @@ dp = Dispatcher()
 
 # 🔹 Храним активные сделки и историю цен
 active_trades = {}
-price_history = {"TSTUSDT": [], "IPUSDT": [], "ADAUSDT": []}
+price_history = {
+    "TSTUSDT": {"1m": [], "15m": [], "30m": [], "1h": []},
+    "IPUSDT": {"1m": [], "15m": [], "30m": [], "1h": []},
+    "ADAUSDT": {"1m": [], "15m": [], "30m": [], "1h": []}
+}
 
 # 🔹 Запуск WebSocket
 async def start_futures_websocket():
@@ -33,20 +37,20 @@ async def start_futures_websocket():
     print("⏳ Ожидание подключения к WebSocket...")
     await asyncio.to_thread(ws.run_forever)
 
-# 🔹 Подписка на свечи Binance Futures
+# 🔹 Подписка на свечи Binance Futures (1m, 15m, 30m, 1h)
 def on_open(ws):
     print("✅ Успешное подключение к WebSocket!")
     subscribe_message = json.dumps({
         "method": "SUBSCRIBE",
         "params": [
-            "tstusdt@kline_1m",
-            "ipusdt@kline_1m",
-            "adausdt@kline_1m"
+            "tstusdt@kline_1m", "tstusdt@kline_15m", "tstusdt@kline_30m", "tstusdt@kline_1h",
+            "ipusdt@kline_1m", "ipusdt@kline_15m", "ipusdt@kline_30m", "ipusdt@kline_1h",
+            "adausdt@kline_1m", "adausdt@kline_15m", "adausdt@kline_30m", "adausdt@kline_1h"
         ],
         "id": 1
     })
     ws.send(subscribe_message)
-    print("📩 Подписка на свечи Binance Futures")
+    print("📩 Подписка на свечи Binance Futures (1m, 15m, 30m, 1h)")
 
 # 🔹 Обрабатываем входящие данные WebSocket (свечи)
 async def process_futures_message(message):
@@ -57,38 +61,51 @@ async def process_futures_message(message):
         if "k" in data:
             candle = data["k"]
             symbol = data["s"]
+            interval = candle["i"]
             close_price = float(candle["c"])  # Цена закрытия
 
-            print(f"📊 {symbol} (1m): Закрытие {close_price} USDT")
+            print(f"📊 {symbol} ({interval}): Закрытие {close_price} USDT")
 
-            # Добавляем цену в историю
-            if symbol not in price_history:
-                price_history[symbol] = []
-            price_history[symbol].append(close_price)
+            # Сохраняем цену в истории
+            if symbol in price_history and interval in price_history[symbol]:
+                price_history[symbol][interval].append(close_price)
+                if len(price_history[symbol][interval]) > 50:
+                    price_history[symbol][interval].pop(0)
 
-            # Если данных достаточно, анализируем тренд
-            if len(price_history[symbol]) > 50:
-                trend = analyze_trend(symbol, price_history[symbol])
+            # Если есть данные по всем таймфреймам – анализируем тренд
+            if all(len(price_history[symbol][tf]) >= 50 for tf in ["1m", "15m", "30m", "1h"]):
+                trend = analyze_combined_trend(symbol)
                 if trend:
                     await send_trade_signal(symbol, close_price, trend)
 
     except Exception as e:
         print(f"❌ Ошибка WebSocket: {e}")
 
-# 🔹 Анализ тренда на основе последних 50 свечей
-def analyze_trend(symbol, prices):
-    df = pd.DataFrame(prices, columns=["close"])
-    df["ATR"] = compute_atr(df)
-    df["RSI"] = compute_rsi(df["close"])
-    df["MACD"], df["Signal_Line"] = compute_macd(df["close"])
+# 🔹 Анализ тренда на основе 4 таймфреймов
+def analyze_combined_trend(symbol):
+    trends = []
+    for tf in ["1m", "15m", "30m", "1h"]:
+        prices = price_history[symbol][tf]
+        df = pd.DataFrame(prices, columns=["close"])
+        df["ATR"] = compute_atr(df)
+        df["RSI"] = compute_rsi(df["close"])
+        df["MACD"], df["Signal_Line"] = compute_macd(df["close"])
 
-    last_rsi = df["RSI"].iloc[-1]
-    last_macd = df["MACD"].iloc[-1]
-    last_signal_line = df["Signal_Line"].iloc[-1]
+        last_rsi = df["RSI"].iloc[-1]
+        last_macd = df["MACD"].iloc[-1]
+        last_signal_line = df["Signal_Line"].iloc[-1]
 
-    if last_macd > last_signal_line and last_rsi < 70:
+        if last_macd > last_signal_line and last_rsi < 70:
+            trends.append("LONG")
+        elif last_macd < last_signal_line and last_rsi > 30:
+            trends.append("SHORT")
+        else:
+            trends.append(None)
+
+    # Если на всех таймфреймах LONG → даём сигнал
+    if trends.count("LONG") >= 3:
         return "LONG"
-    elif last_macd < last_signal_line and last_rsi > 30:
+    elif trends.count("SHORT") >= 3:
         return "SHORT"
     return None
 
@@ -120,27 +137,6 @@ async def send_message_safe(message):
         await send_message_safe(message)
     except Exception as e:
         print(f"❌ Ошибка при отправке в Telegram: {e}")
-
-# 🔹 Функции индикаторов
-def compute_atr(df, period=14):
-    df["tr"] = df["close"].diff().abs()
-    atr = df["tr"].rolling(window=period).mean()
-    return atr
-
-def compute_rsi(prices, period=14):
-    delta = prices.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-    rs = gain / loss
-    rsi = 100 - (100 / (1 + rs))
-    return rsi
-
-def compute_macd(prices, short_window=12, long_window=26, signal_window=9):
-    short_ema = prices.ewm(span=short_window, adjust=False).mean()
-    long_ema = prices.ewm(span=long_window, adjust=False).mean()
-    macd = short_ema - long_ema
-    signal_line = macd.ewm(span=signal_window, adjust=False).mean()
-    return macd, signal_line
 
 # 🔹 Запуск WebSocket и бота
 async def main():
