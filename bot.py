@@ -7,46 +7,42 @@ from aiogram import Bot, Dispatcher
 from aiogram.exceptions import TelegramRetryAfter
 
 # 🔹 Загружаем переменные среды из Railway Variables
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-if not TELEGRAM_BOT_TOKEN:
-    raise ValueError("❌ Ошибка: TELEGRAM_BOT_TOKEN не задан в Railway Variables!")
 if not TELEGRAM_CHAT_ID:
     raise ValueError("❌ Ошибка: TELEGRAM_CHAT_ID не задан в Railway Variables!")
 
 # 🔹 Создаём бота и диспетчер
-bot = Bot(token=TELEGRAM_BOT_TOKEN)
+bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
 
-# 🔹 Храним активные сделки
-active_trades = {}  
+# 🔹 Храним историю цен и активные сигналы
 price_history = {"TSTUSDT": [], "IPUSDT": [], "ADAUSDT": [], "ETHUSDT": []}
+active_trades = {}  # Храним открытые сигналы
 
-# 🔹 Подключение к WebSocket Binance Futures
+# 🔹 Подключение к Binance WebSocket (асинхронно)
 async def start_futures_websocket():
-    url = "wss://fstream.binance.com/ws"
-    subscribe_message = json.dumps({
-        "method": "SUBSCRIBE",
-        "params": [
-            "tstusdt@kline_1m", "tstusdt@kline_15m", "tstusdt@kline_30m", "tstusdt@kline_1h",
-            "ipusdt@kline_1m", "ipusdt@kline_15m", "ipusdt@kline_30m", "ipusdt@kline_1h",
-            "adausdt@kline_1m", "adausdt@kline_15m", "adausdt@kline_30m", "adausdt@kline_1h",
-            "ethusdt@kline_1m", "ethusdt@kline_15m", "ethusdt@kline_30m", "ethusdt@kline_1h"
-        ],
-        "id": 1
-    })
-
-    async with websockets.connect(url) as ws:
+    uri = "wss://fstream.binance.com/ws"
+    print("🔄 Запуск WebSocket Binance Futures...")
+    
+    async with websockets.connect(uri) as ws:
+        subscribe_message = json.dumps({
+            "method": "SUBSCRIBE",
+            "params": [
+                "tstusdt@kline_1m", "ipusdt@kline_1m", "adausdt@kline_1m", "ethusdt@kline_1m"
+            ],
+            "id": 1
+        })
         await ws.send(subscribe_message)
-        print("📩 Подписка на Binance Futures (свечи)")
+        print("✅ Подписка на Binance Futures (свечи)")
 
         async for message in ws:
             await process_futures_message(message)
 
 # 🔹 Обрабатываем входящие данные WebSocket
 async def process_futures_message(message):
-    global active_trades, price_history
+    global price_history, active_trades
     try:
         data = json.loads(message)
 
@@ -57,6 +53,7 @@ async def process_futures_message(message):
 
             print(f"📊 {symbol}: Закрытие свечи {close_price} USDT")
 
+            # Если в истории цены есть, добавляем новую цену
             if symbol in price_history:
                 price_history[symbol].append(close_price)
 
@@ -73,28 +70,33 @@ async def process_futures_message(message):
                 last_signal_line = df['Signal_Line'].iloc[-1]
                 last_atr = df['ATR'].iloc[-1]
 
-                # Проверяем, если сделка уже есть
-                if symbol in active_trades:
-                    trade = active_trades[symbol]
-                    if (trade['signal'] == "LONG" and close_price >= trade['tp']) or \
-                       (trade['signal'] == "SHORT" and close_price <= trade['tp']):
-                        await send_message_safe(f"✅ TP достигнут: {symbol}\nЦена: {close_price} USDT")
-                        del active_trades[symbol]
-
-                    elif (trade['signal'] == "LONG" and close_price <= trade['sl']) or \
-                         (trade['signal'] == "SHORT" and close_price >= trade['sl']):
-                        await send_message_safe(f"❌ SL достигнут: {symbol}\nЦена: {close_price} USDT")
-                        del active_trades[symbol]
-
-                    return  
-
-                # Генерация нового сигнала
+                # 💡 Определяем новый сигнал
                 signal = None
                 if last_macd > last_signal_line and last_rsi < 50:
                     signal = "LONG"
                 elif last_macd < last_signal_line and last_rsi > 50:
                     signal = "SHORT"
 
+                # 📌 Проверка: если уже есть активная сделка, новые сигналы не даём
+                if symbol in active_trades:
+                    trade = active_trades[symbol]
+
+                    # Проверяем, достигли ли TP или SL
+                    if (trade["signal"] == "LONG" and close_price >= trade["tp"]) or \
+                       (trade["signal"] == "SHORT" and close_price <= trade["tp"]):
+                        await send_message_safe(f"✅ {symbol} достиг TP ({trade['tp']} USDT)!")
+                        del active_trades[symbol]  # Закрываем сделку
+                        return
+                    if (trade["signal"] == "LONG" and close_price <= trade["sl"]) or \
+                       (trade["signal"] == "SHORT" and close_price >= trade["sl"]):
+                        await send_message_safe(f"❌ {symbol} достиг SL ({trade['sl']} USDT), закрываем сделку.")
+                        del active_trades[symbol]  # Закрываем сделку
+                        return
+                    
+                    # Если сигнал ещё не достиг TP/SL, просто выходим
+                    return  
+
+                # 📢 Отправляем сигнал, если нет активных сделок
                 if signal:
                     tp = round(close_price * (1 + last_atr), 6) if signal == "LONG" else round(close_price * (1 - last_atr), 6)
                     sl = round(close_price * (1 - last_atr * 0.5), 6) if signal == "LONG" else round(close_price * (1 + last_atr * 0.5), 6)
@@ -105,7 +107,8 @@ async def process_futures_message(message):
                         f"🔹 **{signal} {symbol} (Futures)**\n"
                         f"🔹 **Вход**: {close_price} USDT\n"
                         f"🎯 **TP**: {tp} USDT\n"
-                        f"⛔ **SL**: {sl} USDT"
+                        f"⛔ **SL**: {sl} USDT\n"
+                        f"📊 RSI: {round(last_rsi, 2)}, MACD: {round(last_macd, 6)}, ATR: {round(last_atr, 6)}"
                     )
                     await send_message_safe(message)
 
@@ -126,22 +129,21 @@ async def send_message_safe(message):
 
 # 🔹 Функции индикаторов
 def compute_atr(df, period=14):
-    high_low = df['close'].diff().abs()
-    atr = high_low.rolling(window=period).mean()
-    return atr
+    df['tr'] = df['close'].diff().abs().fillna(0)
+    return df['tr'].rolling(window=period).mean()
 
 def compute_rsi(prices, period=14):
     delta = prices.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-    rs = gain / loss
+    rs = gain / loss.replace(0, 1e-9)  # Избегаем деления на 0
     return 100 - (100 / (1 + rs))
 
 def compute_macd(prices, short_window=12, long_window=26, signal_window=9):
-    short_ema = prices.ewm(span=short_window).mean()
-    long_ema = prices.ewm(span=long_window).mean()
+    short_ema = prices.ewm(span=short_window, adjust=False).mean()
+    long_ema = prices.ewm(span=long_window, adjust=False).mean()
     macd = short_ema - long_ema
-    signal_line = macd.ewm(span=signal_window).mean()
+    signal_line = macd.ewm(span=signal_window, adjust=False).mean()
     return macd, signal_line
 
 # 🔹 Запуск WebSocket и бота
