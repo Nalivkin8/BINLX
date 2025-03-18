@@ -81,7 +81,7 @@ async def process_futures_message(message):
     except Exception as e:
         print(f"❌ Ошибка WebSocket: {e}")
 
-# 🔹 Анализ тренда на основе 4 таймфреймов (с ослабленным RSI)
+# 🔹 Анализ тренда на основе 4 таймфреймов (ослабленный RSI)
 def analyze_combined_trend(symbol):
     trends = []
     for tf in ["1m", "15m", "30m", "1h"]:
@@ -112,7 +112,7 @@ def analyze_combined_trend(symbol):
         return "SHORT"
     return None
 
-# 🔹 Вычисление ATR (Средний Истинный Диапазон)
+# 🔹 Вычисление ATR
 def compute_atr(df, period=14):
     df["tr"] = df["close"].diff().abs()
     df["ATR"] = df["tr"].rolling(window=period).mean()
@@ -151,6 +151,18 @@ async def send_trade_signal(symbol, price, trend):
         f"⛔ **SL**: {sl} USDT"
     )
     await send_message_safe(message)
+
+# 🔹 Безопасная отправка сообщений в Telegram
+async def send_message_safe(message):
+    try:
+        print(f"📤 Отправка сообщения в Telegram: {message}")
+        await bot.send_message(TELEGRAM_CHAT_ID, message)
+    except TelegramRetryAfter as e:
+        print(f"⏳ Telegram ограничил отправку, ждем {e.retry_after} сек...")
+        await asyncio.sleep(e.retry_after)
+        await send_message_safe(message)
+    except Exception as e:
+        print(f"❌ Ошибка при отправке в Telegram: {e}")
 
 # 🔹 Запуск WebSocket и бота
 async def main():
