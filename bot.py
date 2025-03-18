@@ -17,10 +17,10 @@ if not TELEGRAM_CHAT_ID:
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
 
-# 🔹 Храним активные сделки
+# 🔹 Храним активные сделки и статусы TP/SL
 active_trades = {}  
 price_history = {"TSTUSDT": [], "IPUSDT": [], "ADAUSDT": [], "ETHUSDT": []}
-trade_status = {}  # Хранение последнего TP/SL для каждой пары
+trade_status = {}  # {"TSTUSDT": {"last_tp": 1.05, "last_sl": 0.95}}
 
 # 🔹 Запуск WebSocket
 async def start_futures_websocket():
@@ -77,18 +77,24 @@ async def process_futures_message(message):
                     trade_status[symbol] = {"last_tp": None, "last_sl": None}
 
                 # TP достигнут (и изменился)
-                if trade["tp"] != trade_status[symbol]["last_tp"] and ((trade["signal"] == "LONG" and price >= trade["tp"]) or (trade["signal"] == "SHORT" and price <= trade["tp"])):
+                if price >= trade["tp"] and trade_status[symbol]["last_tp"] != trade["tp"]:
                     print(f"🎯 {symbol} достиг Take Profit ({trade['tp']} USDT)")
                     trade_status[symbol]["last_tp"] = trade["tp"]
                     await send_message_safe(f"🎯 **Take Profit {symbol} ({trade['tp']} USDT)**")
+                    del active_trades[symbol]  # Убираем сделку
                     return
 
                 # SL достигнут (и изменился)
-                if trade["sl"] != trade_status[symbol]["last_sl"] and ((trade["signal"] == "LONG" and price <= trade["sl"]) or (trade["signal"] == "SHORT" and price >= trade["sl"])):
+                if price <= trade["sl"] and trade_status[symbol]["last_sl"] != trade["sl"]:
                     print(f"⛔ {symbol} достиг Stop Loss ({trade['sl']} USDT)")
                     trade_status[symbol]["last_sl"] = trade["sl"]
                     await send_message_safe(f"⛔ **Stop Loss {symbol} ({trade['sl']} USDT)**")
+                    del active_trades[symbol]  # Убираем сделку
                     return
+
+            # Если по паре уже есть сделка – новые сигналы не отправляем
+            if symbol in active_trades:
+                return
 
             # Обновление истории цен
             if symbol in price_history:
@@ -111,7 +117,7 @@ async def process_futures_message(message):
                     elif last_macd < last_signal_line and last_rsi > 45:
                         signal = "SHORT"
 
-                    if symbol not in active_trades and signal:
+                    if signal:
                         await send_trade_signal(symbol, price, signal)
 
     except Exception as e:
