@@ -40,6 +40,18 @@ async def start_futures_websocket():
         async for message in ws:
             await process_futures_message(message)
 
+# 🔹 Безопасная отправка сообщений в Telegram
+async def send_message_safe(message):
+    try:
+        print(f"📤 Отправка сообщения в Telegram: {message}")
+        await bot.send_message(TELEGRAM_CHAT_ID, message)
+    except TelegramRetryAfter as e:
+        print(f"⏳ Telegram ограничил отправку, ждем {e.retry_after} сек...")
+        await asyncio.sleep(e.retry_after)
+        await send_message_safe(message)
+    except Exception as e:
+        print(f"❌ Ошибка при отправке в Telegram: {e}")
+
 # 🔹 Обрабатываем входящие данные WebSocket
 async def process_futures_message(message):
     global price_history, active_trades
@@ -61,14 +73,10 @@ async def process_futures_message(message):
 
                 df = pd.DataFrame(price_history[symbol], columns=['close'])
                 df['ATR'] = compute_atr(df)
-                df['RSI'] = compute_rsi(df['close'])
                 df['MACD'], df['Signal_Line'] = compute_macd(df['close'])
                 df['EMA_50'] = df['close'].ewm(span=50, adjust=False).mean()
                 df['EMA_200'] = df['close'].ewm(span=200, adjust=False).mean()
                 df['ADX'] = compute_adx(df)
-                df['Volume_MA'] = df['close'].rolling(window=20).mean()
-
-                support, resistance = find_support_resistance(df)
 
                 last_macd = df['MACD'].iloc[-1]
                 last_signal_line = df['Signal_Line'].iloc[-1]
@@ -126,12 +134,6 @@ async def process_futures_message(message):
     except Exception as e:
         print(f"❌ Ошибка WebSocket: {e}")
 
-# 🔹 Поддержка и сопротивление
-def find_support_resistance(df):
-    support = df['close'].rolling(window=50).min().iloc[-1]
-    resistance = df['close'].rolling(window=50).max().iloc[-1]
-    return support, resistance
-
 # 🔹 Динамический TP и SL
 def compute_dynamic_tp_sl(close_price, signal, atr):
     atr_multiplier = 3
@@ -155,13 +157,6 @@ def compute_atr(df, period=14):
     df['tr'] = df['close'].diff().abs().fillna(0)
     return df['tr'].rolling(window=period).mean()
 
-def compute_rsi(prices, period=14):
-    delta = prices.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-    rs = gain / loss.replace(0, 1e-9)
-    return 100 - (100 / (1 + rs))
-
 def compute_macd(prices, short_window=12, long_window=26, signal_window=9):
     short_ema = prices.ewm(span=short_window, adjust=False).mean()
     long_ema = prices.ewm(span=long_window, adjust=False).mean()
@@ -174,6 +169,7 @@ def compute_adx(df, period=14):
     df['adx'] = (df['atr'] / df['close']) * 100
     return df['adx']
 
+# 🔹 Запуск WebSocket и бота
 async def main():
     print("🚀 Бот стартует...")
     asyncio.create_task(start_futures_websocket())  
