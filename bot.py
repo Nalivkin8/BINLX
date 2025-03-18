@@ -76,7 +76,6 @@ async def process_futures_message(message):
             if symbol in active_trades:
                 trade = active_trades[symbol]
 
-                # TP или SL достигнут → сигнал очищается
                 if (trade["signal"] == "LONG" and close_price >= trade["tp"]) or (trade["signal"] == "SHORT" and close_price <= trade["tp"]):
                     print(f"🎯 {symbol} достиг Take Profit ({trade['tp']} USDT)")
                     await send_message_safe(f"🎯 **{symbol} достиг Take Profit ({trade['tp']} USDT)**")
@@ -111,8 +110,6 @@ def analyze_combined_trend(symbol):
         last_macd = df["MACD"].iloc[-1]
         last_signal_line = df["Signal_Line"].iloc[-1]
 
-        print(f"📊 {symbol} ({tf}) | RSI: {round(last_rsi, 2)}, MACD: {round(last_macd, 6)}, Signal: {round(last_signal_line, 6)}")
-
         if last_macd > last_signal_line and last_rsi < 55:
             trends.append("LONG")
         elif last_macd < last_signal_line and last_rsi > 45:
@@ -126,6 +123,31 @@ def analyze_combined_trend(symbol):
         return "SHORT"
     return None
 
+# 🔹 Функция ATR (расширенный анализ волатильности)
+def compute_atr(df, period=14):
+    df["high"] = df["close"].shift(1)  # Имитируем high (текущая цена выше предыдущей)
+    df["low"] = df["close"].shift(-1)  # Имитируем low (текущая цена ниже следующей)
+    df["tr"] = abs(df["high"] - df["low"])
+    atr = df["tr"].rolling(window=period).mean()
+    return atr
+
+# 🔹 Функция RSI (индекс относительной силы)
+def compute_rsi(prices, period=14):
+    delta = prices.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
+
+# 🔹 Функция MACD (сигнальная линия и MACD)
+def compute_macd(prices, short_window=6, long_window=13, signal_window=5):
+    short_ema = prices.ewm(span=short_window, adjust=False).mean()
+    long_ema = prices.ewm(span=long_window, adjust=False).mean()
+    macd = short_ema - long_ema
+    signal_line = macd.ewm(span=signal_window, adjust=False).mean()
+    return macd, signal_line
+
 # 🔹 Отправка сигнала
 async def send_trade_signal(symbol, price, trend):
     tp = round(price * 1.05, 6) if trend == "LONG" else round(price * 0.95, 6)
@@ -133,17 +155,10 @@ async def send_trade_signal(symbol, price, trend):
 
     active_trades[symbol] = {"signal": trend, "entry": price, "tp": tp, "sl": sl}
 
-    signal_emoji = "🟢" if trend == "LONG" else "🔴"
-
-    message = (
-        f"{signal_emoji} **{trend} {symbol} (Futures)**\n"
-        f"🔹 **Вход**: {price} USDT\n"
-        f"🎯 **TP**: {tp} USDT\n"
-        f"⛔ **SL**: {sl} USDT"
-    )
+    message = f"🟢 **{trend} {symbol}** | Вход: {price} | TP: {tp} | SL: {sl}"
     await send_message_safe(message)
 
-# 🔹 Запуск WebSocket и бота
+# 🔹 Запуск бота
 async def main():
     print("🚀 Бот стартует... Railway работает!")
     asyncio.create_task(start_futures_websocket())  
