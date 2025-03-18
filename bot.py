@@ -112,10 +112,21 @@ def analyze_combined_trend(symbol):
         return "SHORT"
     return None
 
+# 🔹 Вычисление ATR (Средний Истинный Диапазон)
+def compute_atr(df, period=14):
+    df["high"] = df["close"].shift(1)
+    df["low"] = df["close"].shift(-1)
+    df["tr"] = abs(df["high"] - df["low"])
+    df["ATR"] = df["tr"].rolling(window=period).mean()
+    return df["ATR"]
+
 # 🔹 Отправка сигнала
 async def send_trade_signal(symbol, price, trend):
-    tp = round(price * 1.05, 6) if trend == "LONG" else round(price * 0.95, 6)
-    sl = round(price * 0.98, 6) if trend == "LONG" else round(price * 1.02, 6)
+    tp_multiplier = 1.05 if trend == "LONG" else 0.95
+    sl_multiplier = 0.98 if trend == "LONG" else 1.02
+
+    tp = round(price * tp_multiplier, 6)
+    sl = round(price * sl_multiplier, 6)
 
     active_trades[symbol] = {"signal": trend, "entry": price, "tp": tp, "sl": sl}
 
