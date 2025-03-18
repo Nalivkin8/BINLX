@@ -46,6 +46,11 @@ def on_open(ws):
     ws.send(subscribe_message)
     print("📩 Подписка на Binance Futures")
 
+# 🔹 Определяем количество знаков после запятой
+def get_decimal_places(price):
+    price_str = f"{price:.10f}".rstrip('0')  # Убираем лишние нули
+    return len(price_str.split('.')[1]) if '.' in price_str else 0
+
 # 🔹 Обрабатываем входящие данные WebSocket
 async def process_futures_message(message):
     global active_trades, price_history
@@ -100,8 +105,10 @@ async def process_futures_message(message):
                         signal = "SHORT"
 
                     if signal:
-                        tp = round(price * 1.05, 6) if signal == "LONG" else round(price * 0.95, 6)
-                        sl = round(price * 0.98, 6) if signal == "LONG" else round(price * 1.02, 6)
+                        decimal_places = get_decimal_places(price)
+
+                        tp = round(price * 1.05, decimal_places) if signal == "LONG" else round(price * 0.95, decimal_places)
+                        sl = round(price * 0.98, decimal_places) if signal == "LONG" else round(price * 1.02, decimal_places)
 
                         active_trades[symbol] = {"signal": signal, "entry": price, "tp": tp, "sl": sl}
 
@@ -109,9 +116,9 @@ async def process_futures_message(message):
 
                         message = (
                             f"{signal_emoji} **{signal} {symbol} (Futures)**\n"
-                            f"🔹 **Вход**: {price} USDT\n"
-                            f"🎯 **TP**: {tp} USDT\n"
-                            f"⛔ **SL**: {sl} USDT"
+                            f"🔹 **Вход**: {price:.{decimal_places}f} USDT\n"
+                            f"🎯 **TP**: {tp:.{decimal_places}f} USDT\n"
+                            f"⛔ **SL**: {sl:.{decimal_places}f} USDT"
                         )
                         await send_message_safe(message)
 
