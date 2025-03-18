@@ -20,7 +20,8 @@ dp = Dispatcher()
 # 🔹 Храним активные сделки и историю тренда
 active_trades = {}
 price_history = {"TSTUSDT": [], "IPUSDT": [], "ADAUSDT": [], "ETHUSDT": []}
-trend_history = {}
+trend_history = {}  # Хранение последнего тренда {"TSTUSDT": "LONG"}
+trend_alert_sent = {}  # Флаг, чтобы не спамить уведомлениями
 
 # 🔹 Запуск WebSocket
 async def start_futures_websocket():
@@ -47,7 +48,7 @@ def on_open(ws):
 
 # 🔹 Обрабатываем WebSocket-сообщения
 async def process_futures_message(message):
-    global active_trades, price_history, trend_history
+    global active_trades, price_history, trend_history, trend_alert_sent
     try:
         data = json.loads(message)
 
@@ -90,7 +91,6 @@ async def process_futures_message(message):
                 last_macd = df['MACD'].iloc[-1]
                 last_signal_line = df['Signal_Line'].iloc[-1]
                 last_adx = df['ADX'].iloc[-1]
-                last_atr = df['ATR'].iloc[-1]
 
                 # Фильтр тренда
                 signal = None
@@ -99,11 +99,15 @@ async def process_futures_message(message):
                 elif last_macd < last_signal_line and last_rsi > 45 and last_adx > 20:
                     signal = "SHORT"
 
-                # Фильтр ложных сигналов (изменение тренда)
+                # Проверка смены тренда (не отправляем повторные уведомления)
                 if symbol in trend_history and trend_history[symbol] != signal:
-                    await send_message_safe(f"⚠️ **{symbol}: возможная смена тренда!**")
-                    del active_trades[symbol]
-                    await send_trade_signal(symbol, price, signal)
+                    if symbol not in trend_alert_sent or not trend_alert_sent[symbol]:
+                        await send_message_safe(f"⚠️ **{symbol}: возможная смена тренда!**")
+                        trend_alert_sent[symbol] = True  # Помечаем, что уже отправляли уведомление
+
+                # Если тренд подтвердился (сигнал совпадает с историей), разрешаем новые уведомления
+                if trend_history.get(symbol) == signal:
+                    trend_alert_sent[symbol] = False
 
                 trend_history[symbol] = signal  
 
