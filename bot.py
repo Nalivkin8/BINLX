@@ -17,10 +17,10 @@ if not TELEGRAM_CHAT_ID:
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
 
-# 🔹 Храним активные сделки
-active_trades = {}  
+# 🔹 Храним активные сделки и тренды
+active_trades = {}
 price_history = {"TSTUSDT": [], "IPUSDT": [], "ADAUSDT": [], "ETHUSDT": []}
-trend_history = {}  # Хранение последнего тренда {"TSTUSDT": "LONG"}
+trend_history = {}
 
 # 🔹 Запуск WebSocket
 async def start_futures_websocket():
@@ -34,7 +34,7 @@ async def start_futures_websocket():
     print("⏳ Ожидание подключения к WebSocket...")
     await asyncio.to_thread(ws.run_forever)
 
-# 🔹 Подписка на свечи Binance Futures
+# 🔹 Подписка на Binance Futures
 def on_open(ws):
     print("✅ Успешное подключение к WebSocket!")
     subscribe_message = json.dumps({
@@ -47,12 +47,7 @@ def on_open(ws):
     ws.send(subscribe_message)
     print("📩 Подписка на Binance Futures")
 
-# 🔹 Определяем количество знаков после запятой
-def get_decimal_places(price):
-    price_str = f"{price:.10f}".rstrip('0')
-    return len(price_str.split('.')[1]) if '.' in price_str else 0
-
-# 🔹 Обрабатываем входящие данные WebSocket
+# 🔹 Обрабатываем WebSocket-сообщения
 async def process_futures_message(message):
     global active_trades, price_history, trend_history
     try:
@@ -95,28 +90,29 @@ async def process_futures_message(message):
                     df = pd.DataFrame(price_history[symbol], columns=['close'])
                     df['RSI'] = compute_rsi(df['close'])
                     df['MACD'], df['Signal_Line'] = compute_macd(df['close'])
+                    df['ADX'] = compute_adx(df)
 
                     last_rsi = df['RSI'].iloc[-1]
                     last_macd = df['MACD'].iloc[-1]
                     last_signal_line = df['Signal_Line'].iloc[-1]
+                    last_adx = df['ADX'].iloc[-1]
 
+                    # 🔹 Новый фильтр тренда: ADX > 20 подтверждает силу
                     signal = None
-                    if last_macd > last_signal_line and last_rsi < 55:
+                    if last_macd > last_signal_line and last_rsi < 55 and last_adx > 20:
                         signal = "LONG"
-                    elif last_macd < last_signal_line and last_rsi > 45:
+                    elif last_macd < last_signal_line and last_rsi > 45 and last_adx > 20:
                         signal = "SHORT"
 
                     # Проверка смены тренда
                     if symbol in trend_history and trend_history[symbol] != signal:
                         print(f"⚠️ {symbol}: Тренд изменился с {trend_history[symbol]} на {signal}")
 
-                        # Закрываем старую сделку
                         if symbol in active_trades:
                             print(f"🔄 Закрываем старую сделку {symbol}")
                             await send_message_safe(f"⚠️ **{symbol} изменил тренд! Старая сделка закрыта.**")
                             del active_trades[symbol]
 
-                        # Запускаем новую сделку
                         await send_trade_signal(symbol, price, signal)
 
                     trend_history[symbol] = signal  
@@ -129,15 +125,14 @@ async def process_futures_message(message):
 
 # 🔹 Отправка сигнала
 async def send_trade_signal(symbol, price, trend):
-    decimal_places = get_decimal_places(price)
+    decimal_places = len(str(price).split(".")[-1])  
 
-    tp_percent = 0.02 if trend == "LONG" else -0.02  # TP от 2%
-    sl_percent = 0.01 if trend == "LONG" else -0.01  # SL от 1%
+    tp_multiplier = 3  
+    sl_multiplier = 1.5  
 
-    tp = round(price * (1 + tp_percent), decimal_places)
-    sl = round(price * (1 - sl_percent), decimal_places)
+    tp = round(price + (price * 0.01 * tp_multiplier) if trend == "LONG" else price - (price * 0.01 * tp_multiplier), decimal_places)
+    sl = round(price - (price * 0.01 * sl_multiplier) if trend == "LONG" else price + (price * 0.01 * sl_multiplier), decimal_places)
 
-    # 🔹 Расчёт ROI
     roi_tp = round(((tp - price) / price) * 100, 2) if trend == "LONG" else round(((price - tp) / price) * 100, 2)
     roi_sl = round(((sl - price) / price) * 100, 2) if trend == "LONG" else round(((price - sl) / price) * 100, 2)
 
@@ -155,12 +150,7 @@ async def send_trade_signal(symbol, price, trend):
 
 # 🔹 Функции индикаторов
 def compute_rsi(prices, period=14):
-    delta = prices.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-    rs = gain / loss
-    rsi = 100 - (100 / (1 + rs))
-    return rsi
+    return prices.diff().rolling(window=period).mean()
 
 def compute_macd(prices, short_window=12, long_window=26, signal_window=9):
     short_ema = prices.ewm(span=short_window, adjust=False).mean()
@@ -169,9 +159,13 @@ def compute_macd(prices, short_window=12, long_window=26, signal_window=9):
     signal_line = macd.ewm(span=signal_window, adjust=False).mean()
     return macd, signal_line
 
-# 🔹 Запуск WebSocket и бота
+def compute_adx(df, period=14):
+    return df['close'].diff().abs().rolling(window=period).mean()
+
+async def send_message_safe(message):
+    await bot.send_message(TELEGRAM_CHAT_ID, message)
+
 async def main():
-    print("🚀 Бот стартует...")
     asyncio.create_task(start_futures_websocket())  
     await dp.start_polling(bot)
 
