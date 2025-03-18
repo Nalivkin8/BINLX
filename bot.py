@@ -17,8 +17,8 @@ if not TELEGRAM_CHAT_ID:
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
 
-# 🔹 Храним активные сделки
-active_trades = {}  
+# 🔹 Храним активные сделки (по парам)
+active_trades = {}
 price_history = {"TSTUSDT": [], "IPUSDT": [], "ADAUSDT": [], "ETHUSDT": []}
 
 # 🔹 Запуск WebSocket
@@ -33,7 +33,7 @@ async def start_futures_websocket():
     print("⏳ Ожидание подключения к WebSocket...")
     await asyncio.to_thread(ws.run_forever)
 
-# 🔹 Подписка на свечи Binance Futures
+# 🔹 Подписка на Binance Futures
 def on_open(ws):
     print("✅ Успешное подключение к WebSocket!")
     subscribe_message = json.dumps({
@@ -48,7 +48,7 @@ def on_open(ws):
 
 # 🔹 Определяем количество знаков после запятой
 def get_decimal_places(price):
-    price_str = f"{price:.10f}".rstrip('0')  # Убираем лишние нули
+    price_str = f"{price:.10f}".rstrip('0')
     return len(price_str.split('.')[1]) if '.' in price_str else 0
 
 # 🔹 Обрабатываем входящие данные WebSocket
@@ -84,7 +84,7 @@ async def process_futures_message(message):
                     del active_trades[symbol]
                     return
 
-            # Если по паре уже есть сделка – новые сигналы не отправляем
+            # **Фильтр сигналов** – новый сигнал даётся только после TP/SL
             if symbol in active_trades:
                 print(f"⚠️ Пропущен сигнал для {symbol} – активна сделка")
                 return
@@ -113,8 +113,12 @@ async def process_futures_message(message):
                     if signal:
                         decimal_places = get_decimal_places(price)
 
-                        tp = round(price * 1.05, decimal_places) if signal == "LONG" else round(price * 0.95, decimal_places)
-                        sl = round(price * 0.98, decimal_places) if signal == "LONG" else round(price * 1.02, decimal_places)
+                        # 🔹 Адаптивные TP и SL (основаны на волатильности)
+                        tp_multiplier = 1 + (0.03 if last_rsi < 40 else 0.02)
+                        sl_multiplier = 1 - (0.02 if last_rsi > 60 else 0.015)
+
+                        tp = round(price * tp_multiplier, decimal_places) if signal == "LONG" else round(price * (2 - tp_multiplier), decimal_places)
+                        sl = round(price * sl_multiplier, decimal_places) if signal == "LONG" else round(price * (2 - sl_multiplier), decimal_places)
 
                         # 🔹 Расчёт ROI
                         roi_tp = round(((tp - price) / price) * 100, 2) if signal == "LONG" else round(((price - tp) / price) * 100, 2)
@@ -162,12 +166,3 @@ def compute_macd(prices, short_window=12, long_window=26, signal_window=9):
     macd = short_ema - long_ema
     signal_line = macd.ewm(span=signal_window, adjust=False).mean()
     return macd, signal_line
-
-# 🔹 Запуск WebSocket и бота
-async def main():
-    print("🚀 Бот стартует... Railway работает!")
-    asyncio.create_task(start_futures_websocket())  
-    await dp.start_polling(bot)
-
-if __name__ == "__main__":
-    asyncio.run(main())
