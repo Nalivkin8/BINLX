@@ -18,7 +18,7 @@ bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
 
 # 🔹 Храним активные сделки и историю цен
-active_trades = {}  # Сигналы в памяти
+active_trades = {}
 price_history = {
     "TSTUSDT": {"1m": [], "15m": [], "30m": [], "1h": []},
     "IPUSDT": {"1m": [], "15m": [], "30m": [], "1h": []},
@@ -89,11 +89,10 @@ async def process_futures_message(message):
 
                 return  # Не даём новый сигнал, пока сделка не завершится
 
-            # Если есть данные по всем таймфреймам → анализируем тренд
-            if all(len(price_history[symbol][tf]) >= 50 for tf in ["1m", "15m", "30m", "1h"]):
-                trend = analyze_combined_trend(symbol)
-                if trend:
-                    await send_trade_signal(symbol, close_price, trend)
+            # Анализируем тренд
+            trend = analyze_combined_trend(symbol)
+            if trend:
+                await send_trade_signal(symbol, close_price, trend)
 
     except Exception as e:
         print(f"❌ Ошибка WebSocket: {e}")
@@ -112,9 +111,11 @@ def analyze_combined_trend(symbol):
         last_macd = df["MACD"].iloc[-1]
         last_signal_line = df["Signal_Line"].iloc[-1]
 
-        if last_macd > last_signal_line and last_rsi < 50:
+        print(f"📊 {symbol} ({tf}) | RSI: {round(last_rsi, 2)}, MACD: {round(last_macd, 6)}, Signal: {round(last_signal_line, 6)}")
+
+        if last_macd > last_signal_line and last_rsi < 55:
             trends.append("LONG")
-        elif last_macd < last_signal_line and last_rsi > 50:
+        elif last_macd < last_signal_line and last_rsi > 45:
             trends.append("SHORT")
         else:
             trends.append(None)
@@ -124,27 +125,6 @@ def analyze_combined_trend(symbol):
     elif trends.count("SHORT") >= 3:
         return "SHORT"
     return None
-
-# 🔹 Функции технических индикаторов
-def compute_atr(df, period=14):
-    df["tr"] = df["close"].diff().abs()
-    atr = df["tr"].rolling(window=period).mean()
-    return atr
-
-def compute_rsi(prices, period=6):  # Уменьшен период RSI для более частых сигналов
-    delta = prices.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-    rs = gain / loss
-    rsi = 100 - (100 / (1 + rs))
-    return rsi
-
-def compute_macd(prices, short_window=9, long_window=21, signal_window=7):  # Ослаблены фильтры MACD
-    short_ema = prices.ewm(span=short_window, adjust=False).mean()
-    long_ema = prices.ewm(span=long_window, adjust=False).mean()
-    macd = short_ema - long_ema
-    signal_line = macd.ewm(span=signal_window, adjust=False).mean()
-    return macd, signal_line
 
 # 🔹 Отправка сигнала
 async def send_trade_signal(symbol, price, trend):
