@@ -2,9 +2,9 @@ import websocket
 import json
 import asyncio
 import os
+import pandas as pd
 from aiogram import Bot, Dispatcher
 from aiogram.exceptions import TelegramRetryAfter
-import pandas as pd
 
 # 🔹 Загружаем переменные среды из Railway Variables
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -72,35 +72,25 @@ async def process_futures_message(message):
                 if len(price_history[symbol][interval]) > 50:
                     price_history[symbol][interval].pop(0)
 
-            # Проверка активной сделки
-            if symbol in active_trades:
-                trade = active_trades[symbol]
-
-                if (trade["signal"] == "LONG" and close_price >= trade["tp"]) or (trade["signal"] == "SHORT" and close_price <= trade["tp"]):
-                    print(f"🎯 {symbol} достиг Take Profit ({trade['tp']} USDT)")
-                    await send_message_safe(f"🎯 **{symbol} достиг Take Profit ({trade['tp']} USDT)**")
-                    del active_trades[symbol]
-
-                elif (trade["signal"] == "LONG" and close_price <= trade["sl"]) or (trade["signal"] == "SHORT" and close_price >= trade["sl"]):
-                    print(f"⛔ {symbol} достиг Stop Loss ({trade['sl']} USDT)")
-                    await send_message_safe(f"⛔ **{symbol} достиг Stop Loss ({trade['sl']} USDT)**")
-                    del active_trades[symbol]
-
-                return  # Не даём новый сигнал, пока сделка не завершится
-
-            # Анализируем тренд
-            trend = analyze_combined_trend(symbol)
-            if trend:
-                await send_trade_signal(symbol, close_price, trend)
+            # Проверяем, достаточно ли данных для анализа
+            if all(len(price_history[symbol][tf]) >= 10 for tf in ["1m", "15m", "30m", "1h"]):
+                trend = analyze_combined_trend(symbol)
+                if trend:
+                    await send_trade_signal(symbol, close_price, trend)
 
     except Exception as e:
         print(f"❌ Ошибка WebSocket: {e}")
 
-# 🔹 Анализ тренда на основе 4 таймфреймов
+# 🔹 Анализ тренда на основе 4 таймфреймов (с ослабленным RSI)
 def analyze_combined_trend(symbol):
     trends = []
     for tf in ["1m", "15m", "30m", "1h"]:
         prices = price_history[symbol][tf]
+        
+        # Проверяем, достаточно ли данных
+        if len(prices) < 10:
+            continue
+        
         df = pd.DataFrame(prices, columns=["close"])
         df["ATR"] = compute_atr(df)
         df["RSI"] = compute_rsi(df["close"])
@@ -110,43 +100,22 @@ def analyze_combined_trend(symbol):
         last_macd = df["MACD"].iloc[-1]
         last_signal_line = df["Signal_Line"].iloc[-1]
 
-        if last_macd > last_signal_line and last_rsi < 55:
+        print(f"📊 {symbol} ({tf}) | RSI: {round(last_rsi, 2)}, MACD: {round(last_macd, 6)}, Signal: {round(last_signal_line, 6)}")
+
+        if last_macd > last_signal_line and last_rsi < 50:
             trends.append("LONG")
-        elif last_macd < last_signal_line and last_rsi > 45:
+        elif last_macd < last_signal_line and last_rsi > 50:
             trends.append("SHORT")
         else:
             trends.append(None)
+
+    print(f"📊 Анализ тренда {symbol}: {trends}")  
 
     if trends.count("LONG") >= 3:
         return "LONG"
     elif trends.count("SHORT") >= 3:
         return "SHORT"
     return None
-
-# 🔹 Функция ATR (расширенный анализ волатильности)
-def compute_atr(df, period=14):
-    df["high"] = df["close"].shift(1)  # Имитируем high (текущая цена выше предыдущей)
-    df["low"] = df["close"].shift(-1)  # Имитируем low (текущая цена ниже следующей)
-    df["tr"] = abs(df["high"] - df["low"])
-    atr = df["tr"].rolling(window=period).mean()
-    return atr
-
-# 🔹 Функция RSI (индекс относительной силы)
-def compute_rsi(prices, period=14):
-    delta = prices.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-    rs = gain / loss
-    rsi = 100 - (100 / (1 + rs))
-    return rsi
-
-# 🔹 Функция MACD (сигнальная линия и MACD)
-def compute_macd(prices, short_window=6, long_window=13, signal_window=5):
-    short_ema = prices.ewm(span=short_window, adjust=False).mean()
-    long_ema = prices.ewm(span=long_window, adjust=False).mean()
-    macd = short_ema - long_ema
-    signal_line = macd.ewm(span=signal_window, adjust=False).mean()
-    return macd, signal_line
 
 # 🔹 Отправка сигнала
 async def send_trade_signal(symbol, price, trend):
@@ -155,10 +124,50 @@ async def send_trade_signal(symbol, price, trend):
 
     active_trades[symbol] = {"signal": trend, "entry": price, "tp": tp, "sl": sl}
 
-    message = f"🟢 **{trend} {symbol}** | Вход: {price} | TP: {tp} | SL: {sl}"
+    signal_emoji = "🟢" if trend == "LONG" else "🔴"
+
+    message = (
+        f"{signal_emoji} **{trend} {symbol} (Futures)**\n"
+        f"🔹 **Вход**: {price} USDT\n"
+        f"🎯 **TP**: {tp} USDT\n"
+        f"⛔ **SL**: {sl} USDT"
+    )
     await send_message_safe(message)
 
-# 🔹 Запуск бота
+# 🔹 Безопасная отправка сообщений в Telegram
+async def send_message_safe(message):
+    try:
+        print(f"📤 Отправка сообщения в Telegram: {message}")
+        await bot.send_message(TELEGRAM_CHAT_ID, message)
+    except TelegramRetryAfter as e:
+        print(f"⏳ Telegram ограничил отправку, ждем {e.retry_after} сек...")
+        await asyncio.sleep(e.retry_after)
+        await send_message_safe(message)
+    except Exception as e:
+        print(f"❌ Ошибка при отправке в Telegram: {e}")
+
+# 🔹 Функции индикаторов
+def compute_atr(df, period=14):
+    df["high_low"] = df["close"].diff().abs()
+    df["ATR"] = df["high_low"].rolling(window=period).mean()
+    return df["ATR"]
+
+def compute_rsi(prices, period=14):
+    delta = prices.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
+
+def compute_macd(prices, short_window=12, long_window=26, signal_window=9):
+    short_ema = prices.ewm(span=short_window, adjust=False).mean()
+    long_ema = prices.ewm(span=long_window, adjust=False).mean()
+    macd = short_ema - long_ema
+    signal_line = macd.ewm(span=signal_window, adjust=False).mean()
+    return macd, signal_line
+
+# 🔹 Запуск WebSocket и бота
 async def main():
     print("🚀 Бот стартует... Railway работает!")
     asyncio.create_task(start_futures_websocket())  
