@@ -19,7 +19,7 @@ dp = Dispatcher()
 
 # 🔹 Храним активные сделки
 active_trades = {}  
-price_history = {"TSTUSDT": [], "IPUSDT": [], "ADAUSDT": []}
+price_history = {"TSTUSDT": [], "IPUSDT": [], "ADAUSDT": [], "ETHUSDT": []}
 
 # 🔹 Запуск WebSocket
 async def start_futures_websocket():
@@ -39,7 +39,7 @@ def on_open(ws):
     subscribe_message = json.dumps({
         "method": "SUBSCRIBE",
         "params": [
-            "tstusdt@trade", "ipusdt@trade", "adausdt@trade"
+            "tstusdt@trade", "ipusdt@trade", "adausdt@trade", "ethusdt@trade"
         ],
         "id": 1
     })
