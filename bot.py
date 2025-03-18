@@ -83,8 +83,9 @@ async def process_futures_message(message):
                 last_atr = df['ATR'].iloc[-1]
                 last_adx = df['ADX'].iloc[-1]
 
-                # 📌 Фильтр слабых сигналов
-                if last_atr < close_price * 0.0005 or last_adx < 20:
+                # 🛠 Фильтр слабых сигналов (если ATR NaN или слишком маленький)
+                if pd.isna(last_atr) or last_atr < close_price * 0.0005:
+                    print(f"🚫 {symbol}: ATR слишком мал или NaN, пропускаем сигнал")
                     return  
 
                 # 💡 Определяем новый сигнал
@@ -136,6 +137,8 @@ async def process_futures_message(message):
 
 # 🔹 Динамический TP и SL
 def compute_dynamic_tp_sl(close_price, signal, atr):
+    if pd.isna(atr) or atr == 0:
+        return close_price, close_price  # Возвращаем цену входа, если ATR сломан
     atr_multiplier = 3
     tp = close_price + atr_multiplier * atr if signal == "LONG" else close_price - atr_multiplier * atr
     sl = close_price - atr_multiplier * 0.7 * atr if signal == "LONG" else close_price + atr_multiplier * 0.7 * atr
@@ -143,37 +146,14 @@ def compute_dynamic_tp_sl(close_price, signal, atr):
 
 # 🔹 ROI расчет
 def compute_roi(entry, tp, sl):
+    if pd.isna(tp) or pd.isna(sl):
+        return 0  # Если TP или SL NaN, ROI = 0
     tp_roi = ((tp - entry) / entry) * 100 if tp > entry else ((entry - tp) / entry) * 100
     sl_roi = ((sl - entry) / entry) * 100 if sl > entry else ((entry - sl) / entry) * 100
     return (tp_roi + sl_roi) / 2  
 
-# 🔹 Определение точности цены
-def get_price_precision(price):
-    price_str = f"{price:.10f}".rstrip('0')
-    return len(price_str.split('.')[1]) if '.' in price_str else 0
-
-# 🔹 Функции индикаторов
+# 🔹 Фикс NaN в ATR
 def compute_atr(df, period=14):
     df['tr'] = df['close'].diff().abs().fillna(0)
-    return df['tr'].rolling(window=period).mean()
+    return df['tr'].rolling(window=period).mean().fillna(0)
 
-def compute_macd(prices, short_window=12, long_window=26, signal_window=9):
-    short_ema = prices.ewm(span=short_window, adjust=False).mean()
-    long_ema = prices.ewm(span=long_window, adjust=False).mean()
-    macd = short_ema - long_ema
-    signal_line = macd.ewm(span=signal_window, adjust=False).mean()
-    return macd, signal_line
-
-def compute_adx(df, period=14):
-    df['atr'] = df['close'].diff().abs().rolling(window=period).mean()
-    df['adx'] = (df['atr'] / df['close']) * 100
-    return df['adx']
-
-# 🔹 Запуск WebSocket и бота
-async def main():
-    print("🚀 Бот стартует...")
-    asyncio.create_task(start_futures_websocket())  
-    await dp.start_polling(bot)
-
-if __name__ == "__main__":
-    asyncio.run(main())
