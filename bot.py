@@ -12,9 +12,13 @@ from aiogram.exceptions import TelegramRetryAfter
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 BINANCE_API_URL = "https://fapi.binance.com/fapi/v1/klines"
+BINANCE_API_KEY = os.getenv("BINANCE_API_KEY")  # 🔹 Новый параметр
+BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET")  # 🔹 Новый параметр
 
 if not TELEGRAM_CHAT_ID:
     raise ValueError("❌ Ошибка: TELEGRAM_CHAT_ID не задан в Railway Variables!")
+if not BINANCE_API_KEY or not BINANCE_API_SECRET:
+    raise ValueError("❌ Ошибка: Не заданы API-ключи Binance в Railway Variables!")
 
 # 🔹 Создаём бота и диспетчер
 bot = Bot(token=TELEGRAM_TOKEN)
@@ -47,15 +51,18 @@ def on_open(ws):
     ws.send(subscribe_message)
     print("📩 Отправлен запрос на подписку к Binance Futures")
 
-# 🔹 Запрос свечей с Binance API
+# 🔹 Запрос свечей с Binance API с API-ключом
 def get_candles(symbol, interval, limit=100):
     url = f"{BINANCE_API_URL}?symbol={symbol}&interval={interval}&limit={limit}"
+    headers = {
+        "X-MBX-APIKEY": BINANCE_API_KEY  # 🔹 Добавили авторизацию по API-ключу
+    }
     try:
-        response = requests.get(url, timeout=5)
+        response = requests.get(url, headers=headers, timeout=5)
         if response.status_code == 200:
             return response.json()
         else:
-            print(f"❌ Ошибка Binance API: {response.text}")
+            print(f"❌ Ошибка Binance API: {response.status_code} - {response.text}")
             return None
     except requests.exceptions.RequestException as e:
         print(f"❌ Binance API не отвечает: {e}")
@@ -70,6 +77,7 @@ def analyze_trend(symbol):
         print(f"📩 Запрос свечей для {symbol} на таймфрейме {tf}")
         candles = get_candles(symbol, tf)
         if not candles:
+            print(f"⚠️ Нет данных по {symbol} на {tf}!")
             continue
 
         df = pd.DataFrame(candles, columns=['time', 'open', 'high', 'low', 'close', 'volume', 'close_time', 'qav', 'trades', 'taker_base', 'taker_quote', 'ignore'])
@@ -104,22 +112,6 @@ async def process_futures_message(message):
             symbol = data['s']
             price = float(data['p'])
             print(f"📊 Получено обновление цены {symbol}: {price} USDT")
-
-            # Проверяем TP/SL
-            if symbol in active_trades:
-                trade = active_trades[symbol]
-
-                if (trade["signal"] == "LONG" and price >= trade["tp"]) or (trade["signal"] == "SHORT" and price <= trade["tp"]):
-                    print(f"🎯 {symbol} достиг Take Profit ({trade['tp']} USDT)")
-                    await send_message_safe(f"🎯 **{symbol} достиг Take Profit ({trade['tp']} USDT)**")
-                    del active_trades[symbol]
-
-                elif (trade["signal"] == "LONG" and price <= trade["sl"]) or (trade["signal"] == "SHORT" and price >= trade["sl"]):
-                    print(f"⛔ {symbol} достиг Stop Loss ({trade['sl']} USDT)")
-                    await send_message_safe(f"⛔ **{symbol} достиг Stop Loss ({trade['sl']} USDT)**")
-                    del active_trades[symbol]
-
-                return  
 
             trend = analyze_trend(symbol)
             if not trend:
