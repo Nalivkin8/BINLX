@@ -131,8 +131,11 @@ async def process_futures_message(message):
 async def send_trade_signal(symbol, price, trend):
     decimal_places = get_decimal_places(price)
 
-    tp = round(price * 1.03, decimal_places) if trend == "LONG" else round(price * 0.97, decimal_places)
-    sl = round(price * 0.99, decimal_places) if trend == "LONG" else round(price * 1.01, decimal_places)
+    tp_percent = 0.01 if trend == "LONG" else -0.01  # TP от 1%
+    sl_percent = 0.005 if trend == "LONG" else -0.005  # SL от 0.5%
+
+    tp = round(price * (1 + tp_percent), decimal_places)
+    sl = round(price * (1 - sl_percent), decimal_places)
 
     # 🔹 Расчёт ROI
     roi_tp = round(((tp - price) / price) * 100, 2) if trend == "LONG" else round(((price - tp) / price) * 100, 2)
