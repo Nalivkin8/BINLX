@@ -18,7 +18,7 @@ bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
 
 # 🔹 Храним активные сделки и историю цен
-active_trades = {}
+active_trades = {}  # Сигналы в памяти
 price_history = {
     "TSTUSDT": {"1m": [], "15m": [], "30m": [], "1h": []},
     "IPUSDT": {"1m": [], "15m": [], "30m": [], "1h": []},
@@ -72,7 +72,24 @@ async def process_futures_message(message):
                 if len(price_history[symbol][interval]) > 50:
                     price_history[symbol][interval].pop(0)
 
-            # Если есть данные по всем таймфреймам – анализируем тренд
+            # Проверка активной сделки
+            if symbol in active_trades:
+                trade = active_trades[symbol]
+
+                # TP или SL достигнут → сигнал очищается
+                if (trade["signal"] == "LONG" and close_price >= trade["tp"]) or (trade["signal"] == "SHORT" and close_price <= trade["tp"]):
+                    print(f"🎯 {symbol} достиг Take Profit ({trade['tp']} USDT)")
+                    await send_message_safe(f"🎯 **{symbol} достиг Take Profit ({trade['tp']} USDT)**")
+                    del active_trades[symbol]
+
+                elif (trade["signal"] == "LONG" and close_price <= trade["sl"]) or (trade["signal"] == "SHORT" and close_price >= trade["sl"]):
+                    print(f"⛔ {symbol} достиг Stop Loss ({trade['sl']} USDT)")
+                    await send_message_safe(f"⛔ **{symbol} достиг Stop Loss ({trade['sl']} USDT)**")
+                    del active_trades[symbol]
+
+                return  # Не даём новый сигнал, пока сделка не завершится
+
+            # Если есть данные по всем таймфреймам → анализируем тренд
             if all(len(price_history[symbol][tf]) >= 50 for tf in ["1m", "15m", "30m", "1h"]):
                 trend = analyze_combined_trend(symbol)
                 if trend:
@@ -81,7 +98,7 @@ async def process_futures_message(message):
     except Exception as e:
         print(f"❌ Ошибка WebSocket: {e}")
 
-# 🔹 Анализ тренда на основе 4 таймфреймов (ослабленный RSI)
+# 🔹 Анализ тренда на основе 4 таймфреймов
 def analyze_combined_trend(symbol):
     trends = []
     for tf in ["1m", "15m", "30m", "1h"]:
@@ -95,8 +112,6 @@ def analyze_combined_trend(symbol):
         last_macd = df["MACD"].iloc[-1]
         last_signal_line = df["Signal_Line"].iloc[-1]
 
-        print(f"📊 {symbol} ({tf}) | RSI: {round(last_rsi, 2)}, MACD: {round(last_macd, 6)}, Signal: {round(last_signal_line, 6)}")
-
         if last_macd > last_signal_line and last_rsi < 50:
             trends.append("LONG")
         elif last_macd < last_signal_line and last_rsi > 50:
@@ -104,36 +119,11 @@ def analyze_combined_trend(symbol):
         else:
             trends.append(None)
 
-    print(f"📊 Анализ тренда {symbol}: {trends}")  
-
     if trends.count("LONG") >= 3:
         return "LONG"
     elif trends.count("SHORT") >= 3:
         return "SHORT"
     return None
-
-# 🔹 Вычисление ATR
-def compute_atr(df, period=14):
-    df["tr"] = df["close"].diff().abs()
-    df["ATR"] = df["tr"].rolling(window=period).mean()
-    return df["ATR"]
-
-# 🔹 Функция RSI
-def compute_rsi(prices, period=14):
-    delta = prices.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-    rs = gain / loss
-    rsi = 100 - (100 / (1 + rs))
-    return rsi
-
-# 🔹 Функция MACD
-def compute_macd(prices, short_window=12, long_window=26, signal_window=9):
-    short_ema = prices.ewm(span=short_window, adjust=False).mean()
-    long_ema = prices.ewm(span=long_window, adjust=False).mean()
-    macd = short_ema - long_ema
-    signal_line = macd.ewm(span=signal_window, adjust=False).mean()
-    return macd, signal_line
 
 # 🔹 Отправка сигнала
 async def send_trade_signal(symbol, price, trend):
