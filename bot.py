@@ -21,7 +21,6 @@ dp = Dispatcher()
 active_trades = {}
 price_history = {"TSTUSDT": [], "IPUSDT": [], "ADAUSDT": [], "ETHUSDT": []}
 trend_history = {}  # Хранение последнего тренда {"TSTUSDT": "LONG"}
-trend_alert_sent = {}  # Флаг, чтобы не спамить уведомлениями
 
 # 🔹 Запуск WebSocket
 async def start_futures_websocket():
@@ -48,7 +47,7 @@ def on_open(ws):
 
 # 🔹 Обрабатываем WebSocket-сообщения
 async def process_futures_message(message):
-    global active_trades, price_history, trend_history, trend_alert_sent
+    global active_trades, price_history, trend_history
     try:
         data = json.loads(message)
 
@@ -99,15 +98,11 @@ async def process_futures_message(message):
                 elif last_macd < last_signal_line and last_rsi > 45 and last_adx > 20:
                     signal = "SHORT"
 
-                # Проверка смены тренда (не отправляем повторные уведомления)
+                # Если произошла смена тренда, закрываем старую сделку и открываем новую
                 if symbol in trend_history and trend_history[symbol] != signal:
-                    if symbol not in trend_alert_sent or not trend_alert_sent[symbol]:
-                        await send_message_safe(f"⚠️ **{symbol}: возможная смена тренда!**")
-                        trend_alert_sent[symbol] = True  # Помечаем, что уже отправляли уведомление
-
-                # Если тренд подтвердился (сигнал совпадает с историей), разрешаем новые уведомления
-                if trend_history.get(symbol) == signal:
-                    trend_alert_sent[symbol] = False
+                    if symbol in active_trades:
+                        print(f"🔄 Закрываем старую сделку {symbol} из-за смены тренда")
+                        del active_trades[symbol]  # Закрываем старую сделку
 
                 trend_history[symbol] = signal  
 
