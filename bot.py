@@ -8,30 +8,30 @@ import requests
 from aiogram import Bot, Dispatcher
 from aiogram.exceptions import TelegramRetryAfter
 
-# Загружаем переменные среды из Railway Variables
+# 🔹 Загружаем переменные среды из Railway Variables
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")  
-BINANCE_API_URL = "https://fapi.binance.com/fapi/v1/klines"  # Binance Futures API
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+BINANCE_API_URL = "https://fapi.binance.com/fapi/v1/klines"
 
 if not TELEGRAM_CHAT_ID:
     raise ValueError("❌ Ошибка: TELEGRAM_CHAT_ID не задан в Railway Variables!")
 
-# Создаём бота и диспетчер
+# 🔹 Создаём бота и диспетчер
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
 
-# Храним активные сделки
-active_trades = {}  
+# 🔹 Храним активные сделки и цены
+active_trades = {}
 price_history = {"TSTUSDT": [], "IPUSDT": [], "ADAUSDT": []}
 
-# 🔹 Логируем запуск WebSocket
+# 🔹 Запуск WebSocket
 async def start_futures_websocket():
     print("🔄 Запуск WebSocket...")
     loop = asyncio.get_event_loop()
     ws = websocket.WebSocketApp(
         "wss://fstream.binance.com/ws",
         on_message=lambda ws, msg: loop.create_task(process_futures_message(msg)),
-        on_open=on_open  
+        on_open=on_open
     )
     print("⏳ Ожидание подключения к WebSocket...")
     await asyncio.to_thread(ws.run_forever)
@@ -47,22 +47,27 @@ def on_open(ws):
     ws.send(subscribe_message)
     print("📩 Отправлен запрос на подписку к Binance Futures")
 
-# 🔹 Функция для запроса свечей с Binance API
+# 🔹 Запрос свечей с Binance API
 def get_candles(symbol, interval, limit=100):
     url = f"{BINANCE_API_URL}?symbol={symbol}&interval={interval}&limit={limit}"
-    response = requests.get(url)
-    if response.status_code == 200:
-        return response.json()
-    else:
-        print(f"❌ Ошибка запроса свечей Binance API: {response.text}")
+    try:
+        response = requests.get(url, timeout=5)
+        if response.status_code == 200:
+            return response.json()
+        else:
+            print(f"❌ Ошибка Binance API: {response.text}")
+            return None
+    except requests.exceptions.RequestException as e:
+        print(f"❌ Binance API не отвечает: {e}")
         return None
 
-# 🔹 Анализ тренда на разных таймфреймах
+# 🔹 Анализ тренда на нескольких таймфреймах
 def analyze_trend(symbol):
     timeframes = ["1m", "15m", "30m", "1h"]
     trend_scores = {"LONG": 0, "SHORT": 0}
 
     for tf in timeframes:
+        print(f"📩 Запрос свечей для {symbol} на таймфрейме {tf}")
         candles = get_candles(symbol, tf)
         if not candles:
             continue
@@ -73,7 +78,6 @@ def analyze_trend(symbol):
         df['RSI'] = compute_rsi(df['close'])
         df['MACD'], df['Signal_Line'] = compute_macd(df['close'])
 
-        last_atr = df['ATR'].iloc[-1]
         last_rsi = df['RSI'].iloc[-1]
         last_macd = df['MACD'].iloc[-1]
         last_signal_line = df['Signal_Line'].iloc[-1]
@@ -88,9 +92,9 @@ def analyze_trend(symbol):
     elif trend_scores["SHORT"] >= 3:
         return "SHORT"
     else:
-        return None  # Неопределённый тренд
+        return None  
 
-# 🔹 Обрабатываем входящие сообщения WebSocket
+# 🔹 Обрабатываем входящие данные WebSocket
 async def process_futures_message(message):
     global active_trades, price_history
     try:
@@ -119,14 +123,11 @@ async def process_futures_message(message):
 
             trend = analyze_trend(symbol)
             if not trend:
-                return  # Если тренд не подтверждён, игнорируем сигнал
+                print(f"⚠️ Сигнал отклонён: нет подтверждённого тренда для {symbol}")
+                return  
 
-            # Генерация сигнала
-            tp_percent = max(1, price * 0.05) / 100  
-            sl_percent = min(0.5 + price * 0.02, 20) / 100  
-
-            tp = round(price * (1 + tp_percent) if trend == "LONG" else price * (1 - tp_percent), 6)
-            sl = round(price * (1 - sl_percent) if trend == "LONG" else price * (1 + sl_percent), 6)
+            tp = round(price * 1.05, 6) if trend == "LONG" else round(price * 0.95, 6)
+            sl = round(price * 0.98, 6) if trend == "LONG" else round(price * 1.02, 6)
 
             active_trades[symbol] = {"signal": trend, "entry": price, "tp": tp, "sl": sl}
 
@@ -143,25 +144,23 @@ async def process_futures_message(message):
     except Exception as e:
         print(f"❌ Ошибка WebSocket: {e}")
 
-# 🔹 Функции индикаторов (MACD, RSI, ATR)
-def compute_atr(df, period=14):
-    high = df['close'].rolling(window=period).max()
-    low = df['close'].rolling(window=period).min()
-    tr = high - low
-    atr = tr.rolling(window=period).mean()
-    return atr
+# 🔹 Отправка сообщений в Telegram
+async def send_message_safe(message):
+    try:
+        print(f"📤 Отправка сообщения в Telegram: {message}")
+        await bot.send_message(TELEGRAM_CHAT_ID, message)
+    except TelegramRetryAfter as e:
+        print(f"⏳ Telegram ограничил отправку, ждем {e.retry_after} сек...")
+        await asyncio.sleep(e.retry_after)
+        await send_message_safe(message)
+    except Exception as e:
+        print(f"❌ Ошибка при отправке в Telegram: {e}")
 
-def compute_rsi(prices, period=14):
-    delta = prices.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-    rs = gain / loss
-    rsi = 100 - (100 / (1 + rs))
-    return rsi
+# 🔹 Запуск WebSocket и бота
+async def main():
+    print("🚀 Бот стартует... Railway работает!")
+    asyncio.create_task(start_futures_websocket())  
+    await dp.start_polling(bot)
 
-def compute_macd(prices, short_window=12, long_window=26, signal_window=9):
-    short_ema = prices.ewm(span=short_window, adjust=False).mean()
-    long_ema = prices.ewm(span=long_window, adjust=False).mean()
-    macd = short_ema - long_ema
-    signal_line = macd.ewm(span=signal_window, adjust=False).mean()
-    return macd, signal_line
+if __name__ == "__main__":
+    asyncio.run(main())
