@@ -81,7 +81,7 @@ async def process_futures_message(message):
     except Exception as e:
         print(f"❌ Ошибка WebSocket: {e}")
 
-# 🔹 Анализ тренда на основе 4 таймфреймов
+# 🔹 Анализ тренда на основе 4 таймфреймов (с ослабленным RSI)
 def analyze_combined_trend(symbol):
     trends = []
     for tf in ["1m", "15m", "30m", "1h"]:
@@ -95,14 +95,17 @@ def analyze_combined_trend(symbol):
         last_macd = df["MACD"].iloc[-1]
         last_signal_line = df["Signal_Line"].iloc[-1]
 
-        if last_macd > last_signal_line and last_rsi < 70:
+        print(f"📊 {symbol} ({tf}) | RSI: {round(last_rsi, 2)}, MACD: {round(last_macd, 6)}, Signal: {round(last_signal_line, 6)}")
+
+        if last_macd > last_signal_line and last_rsi < 50:
             trends.append("LONG")
-        elif last_macd < last_signal_line and last_rsi > 30:
+        elif last_macd < last_signal_line and last_rsi > 50:
             trends.append("SHORT")
         else:
             trends.append(None)
 
-    # Если на всех таймфреймах LONG → даём сигнал
+    print(f"📊 Анализ тренда {symbol}: {trends}")  
+
     if trends.count("LONG") >= 3:
         return "LONG"
     elif trends.count("SHORT") >= 3:
