@@ -19,7 +19,7 @@ dp = Dispatcher()
 
 # 🔹 Храним историю цен и активные сделки
 price_history = {"TSTUSDT": [], "IPUSDT": [], "ADAUSDT": [], "ETHUSDT": []}
-active_trades = {}  
+active_trades = {}
 
 # 🔹 Подключение к Binance WebSocket
 async def start_futures_websocket():
@@ -49,7 +49,7 @@ async def process_futures_message(message):
         if 'k' in data:
             candle = data['k']
             symbol = data['s']
-            close_price = float(candle['c'])  
+            close_price = float(candle['c'])  # Цена закрытия (без округлений)
 
             print(f"📊 {symbol}: Закрытие свечи {close_price} USDT")
 
@@ -69,8 +69,8 @@ async def process_futures_message(message):
                 last_signal_line = df['Signal_Line'].iloc[-1]
                 last_atr = df['ATR'].iloc[-1]
 
-                # 🔥 Новый фильтр: минимальный ATR для сигнала
-                if last_atr < close_price * 0.0005:  
+                # 🚫 Фильтр слабых сигналов по ATR (волатильность)
+                if last_atr < close_price * 0.0005:
                     print(f"🚫 {symbol}: Слабая волатильность, пропускаем сигнал")
                     return  
 
@@ -100,26 +100,25 @@ async def process_futures_message(message):
 
                 if signal:
                     tp, sl = compute_dynamic_tp_sl(df, close_price, signal, last_atr)
-                    precision = get_price_precision(close_price)
 
-                    # 🔥 Фильтр на слишком маленькие TP и SL
+                    # 🚫 Фильтр слишком близких TP/SL
                     if abs(tp - close_price) < close_price * 0.001 or abs(sl - close_price) < close_price * 0.0005:
                         print(f"🚫 {symbol}: TP/SL слишком близкие, пропускаем сигнал")
                         return  
 
                     active_trades[symbol] = {
                         "signal": signal,
-                        "entry": round(close_price, precision),
-                        "tp": round(tp, precision),
-                        "sl": round(sl, precision)
+                        "entry": close_price,  # Без округлений
+                        "tp": tp,  # Без округлений
+                        "sl": sl   # Без округлений
                     }
 
                     message = (
                         f"🔹 **{signal} {symbol} (Futures)**\n"
-                        f"🔹 **Вход**: {round(close_price, precision)} USDT\n"
-                        f"🎯 **TP**: {round(tp, precision)} USDT\n"
-                        f"⛔ **SL**: {round(sl, precision)} USDT\n"
-                        f"📊 RSI: {round(last_rsi, 2)}, MACD: {round(last_macd, 6)}, ATR: {round(last_atr, 6)}"
+                        f"🔹 **Вход**: {close_price} USDT\n"
+                        f"🎯 **TP**: {tp} USDT\n"
+                        f"⛔ **SL**: {sl} USDT\n"
+                        f"📊 RSI: {round(last_rsi, 2)}, MACD: {round(last_macd, 6)}, ATR: {last_atr}"
                     )
                     await send_message_safe(message)
 
@@ -144,11 +143,6 @@ def compute_dynamic_tp_sl(df, close_price, signal, atr):
     tp = close_price + atr_multiplier * atr if signal == "LONG" else close_price - atr_multiplier * atr
     sl = close_price - atr_multiplier * 0.7 * atr if signal == "LONG" else close_price + atr_multiplier * 0.7 * atr
     return tp, sl
-
-# 🔹 Определяем точность цены
-def get_price_precision(price):
-    price_str = f"{price:.10f}".rstrip('0')  
-    return len(price_str.split('.')[1]) if '.' in price_str else 0
 
 # 🔹 Функции индикаторов
 def compute_atr(df, period=14):
