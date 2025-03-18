@@ -19,9 +19,9 @@ dp = Dispatcher()
 
 # 🔹 Храним историю цен и активные сделки
 price_history = {"TSTUSDT": [], "IPUSDT": [], "ADAUSDT": [], "ETHUSDT": []}
-active_trades = {}  # Храним открытые сигналы
+active_trades = {}  
 
-# 🔹 Подключение к Binance WebSocket (асинхронно)
+# 🔹 Подключение к Binance WebSocket
 async def start_futures_websocket():
     uri = "wss://fstream.binance.com/ws"
     print("🔄 Запуск WebSocket Binance Futures...")
@@ -49,15 +49,14 @@ async def process_futures_message(message):
         if 'k' in data:
             candle = data['k']
             symbol = data['s']
-            close_price = float(candle['c'])  # Цена закрытия
+            close_price = float(candle['c'])  
 
             print(f"📊 {symbol}: Закрытие свечи {close_price} USDT")
 
-            # Добавляем цену в историю
             if symbol in price_history:
                 price_history[symbol].append(close_price)
 
-                if len(price_history[symbol]) > 50:
+                if len(price_history[symbol]) > 100:
                     price_history[symbol].pop(0)
 
                 df = pd.DataFrame(price_history[symbol], columns=['close'])
@@ -70,6 +69,11 @@ async def process_futures_message(message):
                 last_signal_line = df['Signal_Line'].iloc[-1]
                 last_atr = df['ATR'].iloc[-1]
 
+                # 🔥 Новый фильтр: минимальный ATR для сигнала
+                if last_atr < close_price * 0.0005:  
+                    print(f"🚫 {symbol}: Слабая волатильность, пропускаем сигнал")
+                    return  
+
                 # 💡 Определяем новый сигнал
                 signal = None
                 if last_macd > last_signal_line and last_rsi < 50:
@@ -81,7 +85,6 @@ async def process_futures_message(message):
                 if symbol in active_trades:
                     trade = active_trades[symbol]
 
-                    # Проверяем TP и SL
                     if (trade["signal"] == "LONG" and close_price >= trade["tp"]) or \
                        (trade["signal"] == "SHORT" and close_price <= trade["tp"]):
                         await send_message_safe(f"✅ {symbol} достиг TP ({trade['tp']} USDT)!")
@@ -93,13 +96,16 @@ async def process_futures_message(message):
                         del active_trades[symbol]
                         return
                     
-                    # Если сделка активна, новые сигналы не отправляем
                     return  
 
-                # 📢 Отправляем сигнал, если нет активных сделок
                 if signal:
                     tp, sl = compute_dynamic_tp_sl(df, close_price, signal, last_atr)
                     precision = get_price_precision(close_price)
+
+                    # 🔥 Фильтр на слишком маленькие TP и SL
+                    if abs(tp - close_price) < close_price * 0.001 or abs(sl - close_price) < close_price * 0.0005:
+                        print(f"🚫 {symbol}: TP/SL слишком близкие, пропускаем сигнал")
+                        return  
 
                     active_trades[symbol] = {
                         "signal": signal,
@@ -134,21 +140,15 @@ async def send_message_safe(message):
 
 # 🔹 Динамический расчет TP и SL
 def compute_dynamic_tp_sl(df, close_price, signal, atr):
-    atr_multiplier = 2  # Базовый множитель ATR
-    if df['ATR'].mean() > 0.01:
-        atr_multiplier = 3  # Если высокая волатильность, увеличиваем TP/SL
-
+    atr_multiplier = 3 if df['ATR'].mean() > 0.01 else 2
     tp = close_price + atr_multiplier * atr if signal == "LONG" else close_price - atr_multiplier * atr
-    sl = close_price - atr_multiplier * 0.5 * atr if signal == "LONG" else close_price + atr_multiplier * 0.5 * atr
-
+    sl = close_price - atr_multiplier * 0.7 * atr if signal == "LONG" else close_price + atr_multiplier * 0.7 * atr
     return tp, sl
 
-# 🔹 Определяем точность цены (количество знаков после запятой)
+# 🔹 Определяем точность цены
 def get_price_precision(price):
-    price_str = f"{price:.10f}".rstrip('0')  # Убираем лишние нули
-    if '.' in price_str:
-        return len(price_str.split('.')[1])
-    return 0
+    price_str = f"{price:.10f}".rstrip('0')  
+    return len(price_str.split('.')[1]) if '.' in price_str else 0
 
 # 🔹 Функции индикаторов
 def compute_atr(df, period=14):
