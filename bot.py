@@ -99,14 +99,20 @@ async def process_futures_message(message):
                 # 📢 Отправляем сигнал, если нет активных сделок
                 if signal:
                     tp, sl = compute_dynamic_tp_sl(df, close_price, signal, last_atr)
+                    precision = get_price_precision(close_price)
 
-                    active_trades[symbol] = {"signal": signal, "entry": close_price, "tp": tp, "sl": sl}
+                    active_trades[symbol] = {
+                        "signal": signal,
+                        "entry": round(close_price, precision),
+                        "tp": round(tp, precision),
+                        "sl": round(sl, precision)
+                    }
 
                     message = (
                         f"🔹 **{signal} {symbol} (Futures)**\n"
-                        f"🔹 **Вход**: {close_price} USDT\n"
-                        f"🎯 **TP**: {tp} USDT\n"
-                        f"⛔ **SL**: {sl} USDT\n"
+                        f"🔹 **Вход**: {round(close_price, precision)} USDT\n"
+                        f"🎯 **TP**: {round(tp, precision)} USDT\n"
+                        f"⛔ **SL**: {round(sl, precision)} USDT\n"
                         f"📊 RSI: {round(last_rsi, 2)}, MACD: {round(last_macd, 6)}, ATR: {round(last_atr, 6)}"
                     )
                     await send_message_safe(message)
@@ -135,7 +141,14 @@ def compute_dynamic_tp_sl(df, close_price, signal, atr):
     tp = close_price + atr_multiplier * atr if signal == "LONG" else close_price - atr_multiplier * atr
     sl = close_price - atr_multiplier * 0.5 * atr if signal == "LONG" else close_price + atr_multiplier * 0.5 * atr
 
-    return round(tp, 6), round(sl, 6)
+    return tp, sl
+
+# 🔹 Определяем точность цены (количество знаков после запятой)
+def get_price_precision(price):
+    price_str = f"{price:.10f}".rstrip('0')  # Убираем лишние нули
+    if '.' in price_str:
+        return len(price_str.split('.')[1])
+    return 0
 
 # 🔹 Функции индикаторов
 def compute_atr(df, period=14):
