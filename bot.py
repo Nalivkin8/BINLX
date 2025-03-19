@@ -107,11 +107,7 @@ async def process_futures_message(message):
                         decimal_places = get_decimal_places(price)
 
                         # 🔹 Динамический TP и SL на основе ATR
-                        tp_multiplier = 2
-                        sl_multiplier = 1.5
-
-                        tp = round(price + tp_multiplier * last_atr, decimal_places) if signal == "LONG" else round(price - tp_multiplier * last_atr, decimal_places)
-                        sl = round(price - sl_multiplier * last_atr, decimal_places) if signal == "LONG" else round(price + sl_multiplier * last_atr, decimal_places)
+                        tp, sl = compute_tp_sl(price, last_atr, signal, decimal_places)
 
                         roi_tp = round(((tp - price) / price) * 100, 2)
                         roi_sl = round(((sl - price) / price) * 100, 2)
@@ -142,6 +138,19 @@ async def send_message_safe(message):
         await send_message_safe(message)
     except Exception as e:
         print(f"❌ Ошибка при отправке в Telegram: {e}")
+
+# 🔹 Динамический TP и SL на основе ATR (исправленный код)
+def compute_tp_sl(price, atr, signal, decimal_places):
+    tp_multiplier = 3  
+    sl_multiplier = 2  
+
+    # Минимальный шаг изменения TP/SL (не менее 0.5% от входа)
+    min_step = price * 0.005  
+
+    tp = price + max(tp_multiplier * atr, min_step) if signal == "LONG" else price - max(tp_multiplier * atr, min_step)
+    sl = price - max(sl_multiplier * atr, min_step) if signal == "LONG" else price + max(sl_multiplier * atr, min_step)
+
+    return round(tp, decimal_places), round(sl, decimal_places)
 
 # 🔹 Функции индикаторов
 def compute_rsi(prices, period=14):
