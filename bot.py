@@ -21,7 +21,7 @@ active_trades = {}
 price_history = {"IPUSDT": [], "ADAUSDT": [], "ETHUSDT": [], "LTCUSDT": [], "ETCUSDT": []}
 
 # 🔹 Минимальный процент для TP и SL (чтобы не было копеечных значений)
-MIN_TP_SL_PERCENT = 0.002  # 0.2%
+MIN_TP_SL_PERCENT = 0.005  # 0.5%
 
 # 🔹 Функции индикаторов
 def compute_rsi(prices, period=14):
@@ -44,8 +44,8 @@ def compute_atr(prices, period=14):
     return atr
 
 def compute_tp_sl(price, atr, signal, decimal_places):
-    tp_multiplier = 3  
-    sl_multiplier = 2  
+    tp_multiplier = 5  
+    sl_multiplier = 3  
     min_tp_sl = price * MIN_TP_SL_PERCENT  
 
     tp = price + max(tp_multiplier * atr, min_tp_sl) if signal == "LONG" else price - max(tp_multiplier * atr, min_tp_sl)
@@ -108,15 +108,18 @@ async def process_futures_message(message):
 
             if symbol in active_trades:
                 trade = active_trades[symbol]
-                if (trade["signal"] == "LONG" and price >= trade["tp"]) or (trade["signal"] == "SHORT" and price <= trade["tp"]):
-                    del active_trades[symbol]  
-                    await send_message_safe(f"✅ **{format_symbol(symbol)} достиг Take Profit ({trade['tp']} USDT)** 🎯")
+                tp_price = trade["tp"]
+                sl_price = trade["sl"]
+
+                # ✅ Фиксация TP/SL даже если цена их перепрыгнула
+                if (trade["signal"] == "LONG" and price >= tp_price) or (trade["signal"] == "SHORT" and price <= tp_price):
+                    del active_trades[symbol]
+                    await send_message_safe(f"✅ **{format_symbol(symbol)} достиг Take Profit ({tp_price} USDT)** 🎯")
                     return  
-                if (trade["signal"] == "LONG" and price <= trade["sl"]) or (trade["signal"] == "SHORT" and price >= trade["sl"]):
-                    if "sl_triggered" not in trade:  
-                        trade["sl_triggered"] = True
-                        del active_trades[symbol]  
-                        await send_message_safe(f"❌ **{format_symbol(symbol)} достиг Stop Loss ({trade['sl']} USDT)** ⛔")
+
+                if (trade["signal"] == "LONG" and price <= sl_price) or (trade["signal"] == "SHORT" and price >= sl_price):
+                    del active_trades[symbol]
+                    await send_message_safe(f"❌ **{format_symbol(symbol)} достиг Stop Loss ({sl_price} USDT)** ⛔")
                     return  
 
                 print(f"⚠️ Пропущен сигнал для {symbol} – активная сделка еще не закрыта")
@@ -152,7 +155,7 @@ async def process_futures_message(message):
                     decimal_places = get_decimal_places(price)
                     tp, sl = compute_tp_sl(price, last_atr, signal, decimal_places)
 
-                    active_trades[symbol] = {"signal": signal, "entry": price, "tp": tp, "sl": sl, "sl_triggered": False}
+                    active_trades[symbol] = {"signal": signal, "entry": price, "tp": tp, "sl": sl}
 
                     signal_emoji = "🟢" if signal == "LONG" else "🔴"
                     message = (
