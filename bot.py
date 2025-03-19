@@ -19,7 +19,10 @@ dp = Dispatcher()
 
 # 🔹 Храним активные сделки (по парам)
 active_trades = {}
-price_history = {"TSTUSDT": [], "IPUSDT": [], "ADAUSDT": [], "ETHUSDT": []}
+price_history = {
+    "IPUSDT": [], "ADAUSDT": [], "ETHUSDT": [],
+    "LTCUSDT": [], "ETCUSDT": []
+}
 
 # 🔹 Запуск WebSocket
 async def start_futures_websocket():
@@ -39,7 +42,8 @@ def on_open(ws):
     subscribe_message = json.dumps({
         "method": "SUBSCRIBE",
         "params": [
-            "tstusdt@trade", "ipusdt@trade", "adausdt@trade", "ethusdt@trade"
+            "ipusdt@trade", "adausdt@trade", "ethusdt@trade",
+            "ltcusdt@trade", "etcusdt@trade"
         ],
         "id": 1
     })
@@ -67,22 +71,10 @@ async def process_futures_message(message):
 
             print(f"📊 {symbol}: Текущая цена {price} USDT")
 
-            # Проверяем активные сделки
+            # **Фильтр сигналов** – новый сигнал даётся только после TP/SL
             if symbol in active_trades:
-                trade = active_trades[symbol]
-
-                if (trade["signal"] == "LONG" and price >= trade["tp"]) or (trade["signal"] == "SHORT" and price <= trade["tp"]):
-                    await send_message_safe(f"🎯 **{symbol} достиг Take Profit ({trade['tp']} USDT)**")
-                    del active_trades[symbol]
-                    return
-
-                elif (trade["signal"] == "LONG" and price <= trade["sl"]) or (trade["signal"] == "SHORT" and price >= trade["sl"]):
-                    await send_message_safe(f"⛔ **{symbol} достиг Stop Loss ({trade['sl']} USDT)**")
-                    del active_trades[symbol]
-                    return
-
-            if symbol in active_trades:
-                return
+                print(f"⚠️ Пропущен сигнал для {symbol} – активна сделка")
+                return  
 
             # Обновление истории цен
             if symbol in price_history:
@@ -98,10 +90,12 @@ async def process_futures_message(message):
 
                     df['RSI'] = compute_rsi(df['close'])
                     df['MACD'], df['Signal_Line'] = compute_macd(df['close'])
+                    df['ATR'] = compute_atr(df['close'])
 
                     last_rsi = df['RSI'].iloc[-1]
                     last_macd = df['MACD'].iloc[-1]
                     last_signal_line = df['Signal_Line'].iloc[-1]
+                    last_atr = df['ATR'].iloc[-1]
 
                     signal = None
                     if last_macd > last_signal_line and last_rsi < 50:
@@ -112,8 +106,12 @@ async def process_futures_message(message):
                     if signal:
                         decimal_places = get_decimal_places(price)
 
-                        tp = round(price * 1.02, decimal_places) if signal == "LONG" else round(price * 0.98, decimal_places)
-                        sl = round(price * 0.98, decimal_places) if signal == "LONG" else round(price * 1.02, decimal_places)
+                        # 🔹 Динамический TP и SL на основе ATR
+                        tp_multiplier = 2
+                        sl_multiplier = 1.5
+
+                        tp = round(price + tp_multiplier * last_atr, decimal_places) if signal == "LONG" else round(price - tp_multiplier * last_atr, decimal_places)
+                        sl = round(price - sl_multiplier * last_atr, decimal_places) if signal == "LONG" else round(price + sl_multiplier * last_atr, decimal_places)
 
                         roi_tp = round(((tp - price) / price) * 100, 2)
                         roi_sl = round(((sl - price) / price) * 100, 2)
@@ -159,6 +157,11 @@ def compute_macd(prices, short_window=12, long_window=26, signal_window=9):
     macd = short_ema - long_ema
     signal_line = macd.ewm(span=signal_window, adjust=False).mean()
     return macd, signal_line
+
+def compute_atr(prices, period=14):
+    tr = prices.diff().abs()
+    atr = tr.rolling(window=period).mean()
+    return atr
 
 async def main():
     print("🚀 Бот стартует...")
