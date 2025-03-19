@@ -143,6 +143,14 @@ async def process_futures_message(message):
     except Exception as e:
         print(f"❌ Ошибка WebSocket: {e}")
 
+# 🔹 Функция расчёта RSI
+def compute_rsi(prices, period=14):
+    delta = prices.diff()
+    gain = delta.where(delta > 0, 0).rolling(window=period).mean()
+    loss = -delta.where(delta < 0, 0).rolling(window=period).mean()
+    rs = gain / loss.replace(0, 1e-9)
+    return 100 - (100 / (1 + rs))
+
 # 🔹 Функция безопасной отправки сообщений в Telegram
 async def send_message_safe(message):
     try:
