@@ -143,6 +143,28 @@ async def process_futures_message(message):
     except Exception as e:
         print(f"❌ Ошибка WebSocket: {e}")
 
+# 🔹 Функция расчёта RSI
+def compute_rsi(prices, period=14):
+    delta = prices.diff()
+    gain = delta.where(delta > 0, 0).rolling(window=period).mean()
+    loss = -delta.where(delta < 0, 0).rolling(window=period).mean()
+    rs = gain / loss.replace(0, 1e-9)
+    return 100 - (100 / (1 + rs))
+
+# 🔹 Функция расчёта ATR
+def compute_atr(prices, period=14):
+    tr = prices.diff().abs()
+    atr = tr.rolling(window=period).mean()
+    return atr
+
+# 🔹 Функция расчёта MACD
+def compute_macd(prices, short_window=12, long_window=26, signal_window=9):
+    short_ema = prices.ewm(span=short_window, adjust=False).mean()
+    long_ema = prices.ewm(span=long_window, adjust=False).mean()
+    macd = short_ema - long_ema
+    signal_line = macd.ewm(span=signal_window, adjust=False).mean()
+    return macd, signal_line
+
 # 🔹 Функция расчёта TP и SL
 def compute_tp_sl(price, atr, signal, decimal_places):
     tp_multiplier = 3  
