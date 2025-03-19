@@ -24,6 +24,51 @@ price_history = {
     "LTCUSDT": [], "ETCUSDT": []
 }
 
+# 🔹 Функция расчёта RSI
+def compute_rsi(prices, period=14):
+    delta = prices.diff()
+    gain = delta.where(delta > 0, 0).rolling(window=period).mean()
+    loss = -delta.where(delta < 0, 0).rolling(window=period).mean()
+    rs = gain / loss.replace(0, 1e-9)  
+    return 100 - (100 / (1 + rs))
+
+# 🔹 Функция расчёта MACD
+def compute_macd(prices, short_window=12, long_window=26, signal_window=9):
+    short_ema = prices.ewm(span=short_window, adjust=False).mean()
+    long_ema = prices.ewm(span=long_window, adjust=False).mean()
+    macd = short_ema - long_ema
+    signal_line = macd.ewm(span=signal_window, adjust=False).mean()
+    return macd, signal_line
+
+# 🔹 Функция расчёта ATR
+def compute_atr(prices, period=14):
+    tr = prices.diff().abs()
+    atr = tr.rolling(window=period).mean()
+    return atr
+
+# 🔹 Функция расчёта TP и SL
+def compute_tp_sl(price, atr, signal, decimal_places):
+    tp_multiplier = 3  
+    sl_multiplier = 2  
+    min_step = price * 0.005  
+
+    tp = price + max(tp_multiplier * atr, min_step) if signal == "LONG" else price - max(tp_multiplier * atr, min_step)
+    sl = price - max(sl_multiplier * atr, min_step) if signal == "LONG" else price + max(sl_multiplier * atr, min_step)
+
+    return round(tp, decimal_places), round(sl, decimal_places)
+
+# 🔹 Функция безопасной отправки сообщений в Telegram
+async def send_message_safe(message):
+    try:
+        print(f"📤 Отправка в Telegram: {message}")
+        await bot.send_message(TELEGRAM_CHAT_ID, message)
+    except TelegramRetryAfter as e:
+        print(f"⏳ Telegram ограничил отправку, ждем {e.retry_after} сек...")
+        await asyncio.sleep(e.retry_after)
+        await send_message_safe(message)
+    except Exception as e:
+        print(f"❌ Ошибка Telegram: {e}")
+
 # 🔹 Запуск WebSocket
 async def start_futures_websocket():
     print("🔄 Запуск WebSocket Binance Futures...")
@@ -65,34 +110,27 @@ async def process_futures_message(message):
             symbol = data['s']
             price = float(data['p'])
 
-            # 🔹 Фильтр ошибочных значений (0.0 USDT)
             if price <= 0.0:
                 return
 
             print(f"📊 {symbol}: Текущая цена {price} USDT")
 
-            # 📌 Проверка активных сделок на TP/SL
             if symbol in active_trades:
                 trade = active_trades[symbol]
-
-                # 🎯 Take Profit (TP)
                 if (trade["signal"] == "LONG" and price >= trade["tp"]) or (trade["signal"] == "SHORT" and price <= trade["tp"]):
                     await send_message_safe(f"✅ **{symbol} достиг Take Profit ({trade['tp']} USDT)** 🎯")
                     del active_trades[symbol]
                     return  
 
-                # ⛔ Stop Loss (SL)
                 if (trade["signal"] == "LONG" and price <= trade["sl"]) or (trade["signal"] == "SHORT" and price >= trade["sl"]):
                     await send_message_safe(f"❌ **{symbol} достиг Stop Loss ({trade['sl']} USDT)** ⛔")
                     del active_trades[symbol]
                     return  
 
-            # **Фильтр сигналов** – новый сигнал даётся только после TP/SL
             if symbol in active_trades:
                 print(f"⚠️ Пропущен сигнал для {symbol} – активная сделка ещё не закрыта")
                 return  
 
-            # Обновление истории цен
             if symbol in price_history:
                 price_history[symbol].append(price)
 
@@ -121,47 +159,13 @@ async def process_futures_message(message):
 
                     if signal:
                         decimal_places = get_decimal_places(price)
-
-                        # 🔹 Динамический TP и SL на основе ATR
                         tp, sl = compute_tp_sl(price, last_atr, signal, decimal_places)
 
-                        roi_tp = round(((tp - price) / price) * 100, 2)
-                        roi_sl = round(((sl - price) / price) * 100, 2)
-
-                        active_trades[symbol] = {"signal": signal, "entry": price, "tp": tp, "sl": sl}
-
-                        signal_emoji = "🟢" if signal == "LONG" else "🔴"
-
-                        message = (
-                            f"{signal_emoji} **{signal} {symbol} (Futures)**\n"
-                            f"🔹 **Вход**: {price:.{decimal_places}f} USDT\n"
-                            f"🎯 **TP**: {tp:.{decimal_places}f} USDT | ROI: {roi_tp}%\n"
-                            f"⛔ **SL**: {sl:.{decimal_places}f} USDT | ROI: {roi_sl}%"
-                        )
+                        message = f"**{signal} {symbol}**\n🔹 Вход: {price} USDT\n🎯 TP: {tp} USDT\n⛔ SL: {sl} USDT"
                         await send_message_safe(message)
 
     except Exception as e:
         print(f"❌ Ошибка WebSocket: {e}")
-
-# 🔹 Функция расчёта MACD
-def compute_macd(prices, short_window=12, long_window=26, signal_window=9):
-    short_ema = prices.ewm(span=short_window, adjust=False).mean()
-    long_ema = prices.ewm(span=long_window, adjust=False).mean()
-    macd = short_ema - long_ema
-    signal_line = macd.ewm(span=signal_window, adjust=False).mean()
-    return macd, signal_line
-
-# 🔹 Функция безопасной отправки сообщений в Telegram
-async def send_message_safe(message):
-    try:
-        print(f"📤 Отправка сообщения в Telegram: {message}")
-        await bot.send_message(TELEGRAM_CHAT_ID, message)
-    except TelegramRetryAfter as e:
-        print(f"⏳ Telegram ограничил отправку, ждем {e.retry_after} сек...")
-        await asyncio.sleep(e.retry_after)
-        await send_message_safe(message)
-    except Exception as e:
-        print(f"❌ Ошибка при отправке в Telegram: {e}")
 
 async def main():
     print("🚀 Бот стартует...")
