@@ -174,6 +174,14 @@ def compute_macd(prices, short_window=12, long_window=26, signal_window=9):
     signal_line = macd.ewm(span=signal_window, adjust=False).mean()
     return macd, signal_line
 
+# 🔹 Функция расчёта RSI
+def compute_rsi(prices, period=14):
+    delta = prices.diff()
+    gain = delta.where(delta > 0, 0).rolling(window=period).mean()
+    loss = -delta.where(delta < 0, 0).rolling(window=period).mean()
+    rs = gain / loss.replace(0, 1e-9)
+    return 100 - (100 / (1 + rs))
+
 async def main():
     print("🚀 Бот стартует...")
     asyncio.create_task(start_futures_websocket())  
