@@ -85,6 +85,9 @@ def on_open(ws):
     ws.send(subscribe_message)
     print("📩 Подписка на Binance Futures")
 
+def format_pair(symbol):
+    return symbol.replace("USDT", "/USDT")
+
 def get_decimal_places(price):
     price_str = f"{price:.10f}".rstrip('0')
     return len(price_str.split('.')[1]) if '.' in price_str else 0
@@ -101,23 +104,23 @@ async def process_futures_message(message):
             if price <= 0.0:
                 return
 
-            print(f"📊 {symbol}: Текущая цена {price} USDT")
+            print(f"📊 {format_pair(symbol)}: Текущая цена {price} USDT")
 
-            # ✅ **Проверка активной сделки перед отправкой нового сигнала**
             if symbol in active_trades:
                 trade = active_trades[symbol]
                 if (trade["signal"] == "LONG" and price >= trade["tp"]) or (trade["signal"] == "SHORT" and price <= trade["tp"]):
-                    await send_message_safe(f"✅ **{symbol} достиг Take Profit ({trade['tp']} USDT)** 🎯")
+                    await send_message_safe(f"✅ **{format_pair(symbol)} достиг Take Profit ({trade['tp']} USDT)** 🎯")
                     del active_trades[symbol]
                     return  
+
                 if (trade["signal"] == "LONG" and price <= trade["sl"]) or (trade["signal"] == "SHORT" and price >= trade["sl"]):
-                    await send_message_safe(f"❌ **{symbol} достиг Stop Loss ({trade['sl']} USDT)** ⛔")
+                    await send_message_safe(f"❌ **{format_pair(symbol)} достиг Stop Loss ({trade['sl']} USDT)** ⛔")
                     del active_trades[symbol]
                     return  
-                print(f"⚠️ Пропущен сигнал для {symbol} – активная сделка еще не закрыта")
+
+                print(f"⚠️ Пропущен сигнал для {format_pair(symbol)} – активная сделка еще не закрыта")
                 return  
 
-            # 🔹 Обновление истории цен
             if symbol in price_history:
                 price_history[symbol].append(price)
 
@@ -139,10 +142,13 @@ async def process_futures_message(message):
                     last_atr = df['ATR'].iloc[-1]
 
                     signal = None
+                    emoji = ""
                     if last_macd > last_signal_line and last_rsi < 50:
                         signal = "LONG"
+                        emoji = "🟢"
                     elif last_macd < last_signal_line and last_rsi > 50:
                         signal = "SHORT"
+                        emoji = "🔴"
 
                     if signal:
                         decimal_places = get_decimal_places(price)
@@ -150,7 +156,7 @@ async def process_futures_message(message):
 
                         active_trades[symbol] = {"signal": signal, "entry": price, "tp": tp, "sl": sl}
 
-                        message = f"**{signal} {symbol}**\n🔹 Вход: {price:.{decimal_places}f} USDT\n🎯 TP: {tp:.{decimal_places}f} USDT\n⛔ SL: {sl:.{decimal_places}f} USDT"
+                        message = f"{emoji} **{signal} {format_pair(symbol)}**\n🔹 Вход: {price:.{decimal_places}f} USDT\n🎯 TP: {tp:.{decimal_places}f} USDT\n⛔ SL: {sl:.{decimal_places}f} USDT"
                         await send_message_safe(message)
 
     except Exception as e:
