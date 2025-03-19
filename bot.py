@@ -143,38 +143,17 @@ async def process_futures_message(message):
     except Exception as e:
         print(f"❌ Ошибка WebSocket: {e}")
 
-# 🔹 Функция расчёта RSI
-def compute_rsi(prices, period=14):
-    delta = prices.diff()
-    gain = delta.where(delta > 0, 0).rolling(window=period).mean()
-    loss = -delta.where(delta < 0, 0).rolling(window=period).mean()
-    rs = gain / loss.replace(0, 1e-9)
-    return 100 - (100 / (1 + rs))
-
-# 🔹 Функция расчёта ATR
-def compute_atr(prices, period=14):
-    tr = prices.diff().abs()
-    atr = tr.rolling(window=period).mean()
-    return atr
-
-# 🔹 Функция расчёта MACD
-def compute_macd(prices, short_window=12, long_window=26, signal_window=9):
-    short_ema = prices.ewm(span=short_window, adjust=False).mean()
-    long_ema = prices.ewm(span=long_window, adjust=False).mean()
-    macd = short_ema - long_ema
-    signal_line = macd.ewm(span=signal_window, adjust=False).mean()
-    return macd, signal_line
-
-# 🔹 Функция расчёта TP и SL
-def compute_tp_sl(price, atr, signal, decimal_places):
-    tp_multiplier = 3  
-    sl_multiplier = 2  
-    min_step = price * 0.005  
-
-    tp = price + max(tp_multiplier * atr, min_step) if signal == "LONG" else price - max(tp_multiplier * atr, min_step)
-    sl = price - max(sl_multiplier * atr, min_step) if signal == "LONG" else price + max(sl_multiplier * atr, min_step)
-
-    return round(tp, decimal_places), round(sl, decimal_places)
+# 🔹 Функция безопасной отправки сообщений в Telegram
+async def send_message_safe(message):
+    try:
+        print(f"📤 Отправка сообщения в Telegram: {message}")
+        await bot.send_message(TELEGRAM_CHAT_ID, message)
+    except TelegramRetryAfter as e:
+        print(f"⏳ Telegram ограничил отправку, ждем {e.retry_after} сек...")
+        await asyncio.sleep(e.retry_after)
+        await send_message_safe(message)
+    except Exception as e:
+        print(f"❌ Ошибка при отправке в Telegram: {e}")
 
 async def main():
     print("🚀 Бот стартует...")
