@@ -63,7 +63,6 @@ async def process_futures_message(message):
 
             # 🔹 Фильтр ошибочных значений (0.0 USDT)
             if price <= 0.0:
-                print(f"⚠️ Ошибка данных: {symbol} получил некорректную цену ({price} USDT), пропуск...")
                 return
 
             print(f"📊 {symbol}: Текущая цена {price} USDT")
@@ -73,18 +72,15 @@ async def process_futures_message(message):
                 trade = active_trades[symbol]
 
                 if (trade["signal"] == "LONG" and price >= trade["tp"]) or (trade["signal"] == "SHORT" and price <= trade["tp"]):
-                    print(f"🎯 {symbol} достиг Take Profit ({trade['tp']} USDT)")
                     await send_message_safe(f"🎯 **{symbol} достиг Take Profit ({trade['tp']} USDT)**")
                     del active_trades[symbol]
                     return
 
                 elif (trade["signal"] == "LONG" and price <= trade["sl"]) or (trade["signal"] == "SHORT" and price >= trade["sl"]):
-                    print(f"⛔ {symbol} достиг Stop Loss ({trade['sl']} USDT)")
                     await send_message_safe(f"⛔ **{symbol} достиг Stop Loss ({trade['sl']} USDT)**")
                     del active_trades[symbol]
                     return
 
-            # **Фильтр сигналов** – новый сигнал даётся только после TP/SL
             if symbol in active_trades:
                 return
 
@@ -98,7 +94,7 @@ async def process_futures_message(message):
                     df = pd.DataFrame(price_history[symbol], columns=['close'])
 
                     if len(df) < 14:
-                        return  # Данных недостаточно для расчета индикаторов
+                        return  
 
                     df['RSI'] = compute_rsi(df['close'])
                     df['MACD'], df['Signal_Line'] = compute_macd(df['close'])
@@ -116,11 +112,9 @@ async def process_futures_message(message):
                     if signal:
                         decimal_places = get_decimal_places(price)
 
-                        # 🔹 Адаптивные TP и SL
                         tp = round(price * 1.02, decimal_places) if signal == "LONG" else round(price * 0.98, decimal_places)
                         sl = round(price * 0.98, decimal_places) if signal == "LONG" else round(price * 1.02, decimal_places)
 
-                        # 🔹 ROI
                         roi_tp = round(((tp - price) / price) * 100, 2)
                         roi_sl = round(((sl - price) / price) * 100, 2)
 
@@ -138,6 +132,18 @@ async def process_futures_message(message):
 
     except Exception as e:
         print(f"❌ Ошибка WebSocket: {e}")
+
+# 🔹 Функция безопасной отправки сообщений в Telegram
+async def send_message_safe(message):
+    try:
+        print(f"📤 Отправка сообщения в Telegram: {message}")
+        await bot.send_message(TELEGRAM_CHAT_ID, message)
+    except TelegramRetryAfter as e:
+        print(f"⏳ Telegram ограничил отправку, ждем {e.retry_after} сек...")
+        await asyncio.sleep(e.retry_after)
+        await send_message_safe(message)
+    except Exception as e:
+        print(f"❌ Ошибка при отправке в Telegram: {e}")
 
 # 🔹 Функции индикаторов
 def compute_rsi(prices, period=14):
