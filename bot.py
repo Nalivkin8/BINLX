@@ -1,8 +1,8 @@
-import asyncio
+import websocket
 import json
+import asyncio
 import os
 import pandas as pd
-import websockets
 from aiogram import Bot, Dispatcher
 from aiogram.exceptions import TelegramRetryAfter
 
@@ -17,28 +17,127 @@ if not TELEGRAM_CHAT_ID:
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
 
-# 🔹 Храним историю цен и активные сделки
-price_history = {"TSTUSDT": [], "IPUSDT": [], "ADAUSDT": [], "ETHUSDT": []}
+# 🔹 Храним активные сделки (по парам)
 active_trades = {}
+price_history = {"TSTUSDT": [], "IPUSDT": [], "ADAUSDT": [], "ETHUSDT": []}
 
-# 🔹 Подключение к Binance WebSocket
+# 🔹 Запуск WebSocket
 async def start_futures_websocket():
-    uri = "wss://fstream.binance.com/ws"
     print("🔄 Запуск WebSocket Binance Futures...")
-    
-    async with websockets.connect(uri) as ws:
-        subscribe_message = json.dumps({
-            "method": "SUBSCRIBE",
-            "params": [
-                "tstusdt@kline_1m", "ipusdt@kline_1m", "adausdt@kline_1m", "ethusdt@kline_1m"
-            ],
-            "id": 1
-        })
-        await ws.send(subscribe_message)
-        print("✅ Подписка на Binance Futures (свечи)")
+    loop = asyncio.get_event_loop()
+    ws = websocket.WebSocketApp(
+        "wss://fstream.binance.com/ws",
+        on_message=lambda ws, msg: loop.create_task(process_futures_message(msg)),
+        on_open=on_open
+    )
+    print("⏳ Ожидание подключения к WebSocket...")
+    await asyncio.to_thread(ws.run_forever)
 
-        async for message in ws:
-            await process_futures_message(message)
+# 🔹 Подписка на Binance Futures
+def on_open(ws):
+    print("✅ Успешное подключение к WebSocket!")
+    subscribe_message = json.dumps({
+        "method": "SUBSCRIBE",
+        "params": [
+            "tstusdt@trade", "ipusdt@trade", "adausdt@trade", "ethusdt@trade"
+        ],
+        "id": 1
+    })
+    ws.send(subscribe_message)
+    print("📩 Подписка на Binance Futures")
+
+# 🔹 Определяем количество знаков после запятой
+def get_decimal_places(price):
+    price_str = f"{price:.10f}".rstrip('0')
+    return len(price_str.split('.')[1]) if '.' in price_str else 0
+
+# 🔹 Обрабатываем входящие данные WebSocket
+async def process_futures_message(message):
+    global active_trades, price_history
+    try:
+        data = json.loads(message)
+
+        if 's' in data and 'p' in data:
+            symbol = data['s']
+            price = float(data['p'])
+
+            # 🔹 Фильтр ошибочных значений (0.0 USDT)
+            if price <= 0.0:
+                print(f"⚠️ Ошибка данных: {symbol} получил некорректную цену ({price} USDT), пропуск...")
+                return
+
+            print(f"📊 {symbol}: Текущая цена {price} USDT")
+
+            # Проверяем активные сделки
+            if symbol in active_trades:
+                trade = active_trades[symbol]
+
+                if (trade["signal"] == "LONG" and price >= trade["tp"]) or (trade["signal"] == "SHORT" and price <= trade["tp"]):
+                    print(f"🎯 {symbol} достиг Take Profit ({trade['tp']} USDT)")
+                    await send_message_safe(f"🎯 **{symbol} достиг Take Profit ({trade['tp']} USDT)**")
+                    del active_trades[symbol]
+                    return
+
+                elif (trade["signal"] == "LONG" and price <= trade["sl"]) or (trade["signal"] == "SHORT" and price >= trade["sl"]):
+                    print(f"⛔ {symbol} достиг Stop Loss ({trade['sl']} USDT)")
+                    await send_message_safe(f"⛔ **{symbol} достиг Stop Loss ({trade['sl']} USDT)**")
+                    del active_trades[symbol]
+                    return
+
+            # **Фильтр сигналов** – новый сигнал даётся только после TP/SL
+            if symbol in active_trades:
+                print(f"⚠️ Пропущен сигнал для {symbol} – активна сделка")
+                return
+
+            # Обновление истории цен
+            if symbol in price_history:
+                price_history[symbol].append(price)
+
+                if len(price_history[symbol]) > 50:
+                    price_history[symbol].pop(0)
+
+                    df = pd.DataFrame(price_history[symbol], columns=['close'])
+                    df['RSI'] = compute_rsi(df['close'])
+                    df['MACD'], df['Signal_Line'] = compute_macd(df['close'])
+
+                    last_rsi = df['RSI'].iloc[-1]
+                    last_macd = df['MACD'].iloc[-1]
+                    last_signal_line = df['Signal_Line'].iloc[-1]
+
+                    signal = None
+                    if last_macd > last_signal_line and last_rsi < 50:
+                        signal = "LONG"
+                    elif last_macd < last_signal_line and last_rsi > 50:
+                        signal = "SHORT"
+
+                    if signal:
+                        decimal_places = get_decimal_places(price)
+
+                        # 🔹 Адаптивные TP и SL (основаны на волатильности)
+                        tp_multiplier = 1 + (0.03 if last_rsi < 40 else 0.02)
+                        sl_multiplier = 1 - (0.02 if last_rsi > 60 else 0.015)
+
+                        tp = round(price * tp_multiplier, decimal_places) if signal == "LONG" else round(price * (2 - tp_multiplier), decimal_places)
+                        sl = round(price * sl_multiplier, decimal_places) if signal == "LONG" else round(price * (2 - sl_multiplier), decimal_places)
+
+                        # 🔹 Расчёт ROI
+                        roi_tp = round(((tp - price) / price) * 100, 2) if signal == "LONG" else round(((price - tp) / price) * 100, 2)
+                        roi_sl = round(((sl - price) / price) * 100, 2) if signal == "LONG" else round(((price - sl) / price) * 100, 2)
+
+                        active_trades[symbol] = {"signal": signal, "entry": price, "tp": tp, "sl": sl}
+
+                        signal_emoji = "🟢" if signal == "LONG" else "🔴"
+
+                        message = (
+                            f"{signal_emoji} **{signal} {symbol} (Futures)**\n"
+                            f"🔹 **Вход**: {price:.{decimal_places}f} USDT\n"
+                            f"🎯 **TP**: {tp:.{decimal_places}f} USDT | ROI: {roi_tp}%\n"
+                            f"⛔ **SL**: {sl:.{decimal_places}f} USDT | ROI: {roi_sl}%"
+                        )
+                        await send_message_safe(message)
+
+    except Exception as e:
+        print(f"❌ Ошибка WebSocket: {e}")
 
 # 🔹 Безопасная отправка сообщений в Telegram
 async def send_message_safe(message):
@@ -52,131 +151,18 @@ async def send_message_safe(message):
     except Exception as e:
         print(f"❌ Ошибка при отправке в Telegram: {e}")
 
-# 🔹 Обрабатываем входящие данные WebSocket
-async def process_futures_message(message):
-    global price_history, active_trades
-    try:
-        data = json.loads(message)
+# 🔹 Функции индикаторов
+def compute_rsi(prices, period=14):
+    delta = prices.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
 
-        if 'k' in data:
-            candle = data['k']
-            symbol = data['s']
-            close_price = float(candle['c'])
-
-            print(f"📊 {symbol}: Закрытие свечи {close_price} USDT")
-
-            if symbol in price_history:
-                price_history[symbol].append(close_price)
-
-                if len(price_history[symbol]) > 100:
-                    price_history[symbol].pop(0)
-
-                df = pd.DataFrame(price_history[symbol], columns=['close'])
-                df['ATR'] = compute_atr(df)
-                df['MACD'], df['Signal_Line'] = compute_macd(df['close'])
-                df['EMA_50'] = df['close'].ewm(span=50, adjust=False).mean()
-                df['EMA_200'] = df['close'].ewm(span=200, adjust=False).mean()
-                df['ADX'] = compute_adx(df)
-
-                last_macd = df['MACD'].iloc[-1]
-                last_signal_line = df['Signal_Line'].iloc[-1]
-                last_atr = df['ATR'].iloc[-1]
-                last_adx = df['ADX'].iloc[-1]
-
-                # 🛠 Фильтр слабых сигналов (если ATR NaN или слишком маленький)
-                if pd.isna(last_atr) or last_atr < close_price * 0.0005:
-                    print(f"🚫 {symbol}: ATR слишком мал или NaN, пропускаем сигнал")
-                    return  
-
-                # 💡 Определяем новый сигнал
-                signal = None
-                if last_macd > last_signal_line and close_price > df['EMA_50'].iloc[-1]:
-                    signal = "LONG"
-                elif last_macd < last_signal_line and close_price < df['EMA_50'].iloc[-1]:
-                    signal = "SHORT"
-
-                # 📌 Проверка активной сделки
-                if symbol in active_trades:
-                    trade = active_trades[symbol]
-                    if (trade["signal"] == "LONG" and close_price >= trade["tp"]) or \
-                       (trade["signal"] == "SHORT" and close_price <= trade["tp"]):
-                        await send_message_safe(f"✅ {symbol} достиг TP ({trade['tp']} USDT)!")
-                        del active_trades[symbol]
-                        return
-                    if (trade["signal"] == "LONG" and close_price <= trade["sl"]) or \
-                       (trade["signal"] == "SHORT" and close_price >= trade["sl"]):
-                        await send_message_safe(f"❌ {symbol} достиг SL ({trade['sl']} USDT), закрываем сделку.")
-                        del active_trades[symbol]
-                        return
-                    return  
-
-                if signal:
-                    tp, sl = compute_dynamic_tp_sl(close_price, signal, last_atr)
-                    roi = compute_roi(close_price, tp, sl)
-
-                    precision = get_price_precision(close_price)
-
-                    active_trades[symbol] = {
-                        "signal": signal,
-                        "entry": close_price,
-                        "tp": round(tp, precision),
-                        "sl": round(sl, precision)
-                    }
-
-                    message = (
-                        f"🔹 **{signal} {symbol} (Futures)**\n"
-                        f"🔹 **Вход**: {close_price} USDT\n"
-                        f"🎯 **TP**: {round(tp, precision)} USDT\n"
-                        f"⛔ **SL**: {round(sl, precision)} USDT\n"
-                        f"💰 **ROI**: {roi:.2f}%"
-                    )
-                    await send_message_safe(message)
-
-    except Exception as e:
-        print(f"❌ Ошибка WebSocket: {e}")
-
-# 🔹 Динамический TP и SL (Исправление NaN)
-def compute_dynamic_tp_sl(close_price, signal, atr):
-    if pd.isna(atr) or atr <= 0:  
-        return close_price, close_price  
-
-    atr_multiplier = 3
-    tp = close_price + atr_multiplier * atr if signal == "LONG" else close_price - atr_multiplier * atr
-    sl = close_price - atr_multiplier * 0.7 * atr if signal == "LONG" else close_price + atr_multiplier * 0.7 * atr
-    return tp, sl
-
-# 🔹 ROI расчет (Исправление NaN)
-def compute_roi(entry, tp, sl):
-    if pd.isna(tp) or pd.isna(sl) or tp == entry or sl == entry:  
-        return 0  
-    
-    tp_roi = ((tp - entry) / entry) * 100 if tp > entry else ((entry - tp) / entry) * 100
-    sl_roi = ((sl - entry) / entry) * 100 if sl > entry else ((entry - sl) / entry) * 100
-    return (tp_roi + sl_roi) / 2  
-
-# 🔹 ATR (Исправление NaN)
-def compute_atr(df, period=14):
-    df['tr'] = df['close'].diff().abs().fillna(0)  
-    return df['tr'].rolling(window=period).mean().fillna(0)  
-
-# 🔹 MACD
 def compute_macd(prices, short_window=12, long_window=26, signal_window=9):
     short_ema = prices.ewm(span=short_window, adjust=False).mean()
     long_ema = prices.ewm(span=long_window, adjust=False).mean()
     macd = short_ema - long_ema
     signal_line = macd.ewm(span=signal_window, adjust=False).mean()
     return macd, signal_line
-
-# 🔹 ADX
-def compute_adx(df, period=14):
-    df['atr'] = df['close'].diff().abs().rolling(window=period).mean()
-    df['adx'] = (df['atr'] / df['close']) * 100
-    return df['adx']
-
-async def main():
-    print("🚀 Бот стартует...")
-    asyncio.create_task(start_futures_websocket())  
-    await dp.start_polling(bot)
-
-if __name__ == "__main__":
-    asyncio.run(main())
