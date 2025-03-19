@@ -155,16 +155,13 @@ async def send_message_safe(message):
     except Exception as e:
         print(f"❌ Ошибка при отправке в Telegram: {e}")
 
-# 🔹 Динамический TP и SL на основе ATR
-def compute_tp_sl(price, atr, signal, decimal_places):
-    tp_multiplier = 3  
-    sl_multiplier = 2  
-    min_step = price * 0.005  
-
-    tp = price + max(tp_multiplier * atr, min_step) if signal == "LONG" else price - max(tp_multiplier * atr, min_step)
-    sl = price - max(sl_multiplier * atr, min_step) if signal == "LONG" else price + max(sl_multiplier * atr, min_step)
-
-    return round(tp, decimal_places), round(sl, decimal_places)
+# 🔹 Функция расчёта RSI
+def compute_rsi(prices, period=14):
+    delta = prices.diff()
+    gain = delta.where(delta > 0, 0).rolling(window=period).mean()
+    loss = -delta.where(delta < 0, 0).rolling(window=period).mean()
+    rs = gain / loss.replace(0, 1e-9)
+    return 100 - (100 / (1 + rs))
 
 # 🔹 Функция расчёта ATR
 def compute_atr(prices, period=14):
