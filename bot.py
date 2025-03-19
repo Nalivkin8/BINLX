@@ -86,7 +86,6 @@ async def process_futures_message(message):
 
             # **Фильтр сигналов** – новый сигнал даётся только после TP/SL
             if symbol in active_trades:
-                print(f"⚠️ Пропущен сигнал для {symbol} – активна сделка")
                 return
 
             # Обновление истории цен
@@ -97,6 +96,10 @@ async def process_futures_message(message):
                     price_history[symbol].pop(0)
 
                     df = pd.DataFrame(price_history[symbol], columns=['close'])
+
+                    if len(df) < 14:
+                        return  # Данных недостаточно для расчета индикаторов
+
                     df['RSI'] = compute_rsi(df['close'])
                     df['MACD'], df['Signal_Line'] = compute_macd(df['close'])
 
@@ -113,16 +116,13 @@ async def process_futures_message(message):
                     if signal:
                         decimal_places = get_decimal_places(price)
 
-                        # 🔹 Адаптивные TP и SL (основаны на волатильности)
-                        tp_multiplier = 1 + (0.03 if last_rsi < 40 else 0.02)
-                        sl_multiplier = 1 - (0.02 if last_rsi > 60 else 0.015)
+                        # 🔹 Адаптивные TP и SL
+                        tp = round(price * 1.02, decimal_places) if signal == "LONG" else round(price * 0.98, decimal_places)
+                        sl = round(price * 0.98, decimal_places) if signal == "LONG" else round(price * 1.02, decimal_places)
 
-                        tp = round(price * tp_multiplier, decimal_places) if signal == "LONG" else round(price * (2 - tp_multiplier), decimal_places)
-                        sl = round(price * sl_multiplier, decimal_places) if signal == "LONG" else round(price * (2 - sl_multiplier), decimal_places)
-
-                        # 🔹 Расчёт ROI
-                        roi_tp = round(((tp - price) / price) * 100, 2) if signal == "LONG" else round(((price - tp) / price) * 100, 2)
-                        roi_sl = round(((sl - price) / price) * 100, 2) if signal == "LONG" else round(((price - sl) / price) * 100, 2)
+                        # 🔹 ROI
+                        roi_tp = round(((tp - price) / price) * 100, 2)
+                        roi_sl = round(((sl - price) / price) * 100, 2)
 
                         active_trades[symbol] = {"signal": signal, "entry": price, "tp": tp, "sl": sl}
 
@@ -139,26 +139,13 @@ async def process_futures_message(message):
     except Exception as e:
         print(f"❌ Ошибка WebSocket: {e}")
 
-# 🔹 Безопасная отправка сообщений в Telegram
-async def send_message_safe(message):
-    try:
-        print(f"📤 Отправка сообщения в Telegram: {message}")
-        await bot.send_message(TELEGRAM_CHAT_ID, message)
-    except TelegramRetryAfter as e:
-        print(f"⏳ Telegram ограничил отправку, ждем {e.retry_after} сек...")
-        await asyncio.sleep(e.retry_after)
-        await send_message_safe(message)
-    except Exception as e:
-        print(f"❌ Ошибка при отправке в Telegram: {e}")
-
 # 🔹 Функции индикаторов
 def compute_rsi(prices, period=14):
     delta = prices.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-    rs = gain / loss
-    rsi = 100 - (100 / (1 + rs))
-    return rsi
+    gain = delta.where(delta > 0, 0).rolling(window=period).mean()
+    loss = -delta.where(delta < 0, 0).rolling(window=period).mean()
+    rs = gain / loss.replace(0, 1e-9)
+    return 100 - (100 / (1 + rs))
 
 def compute_macd(prices, short_window=12, long_window=26, signal_window=9):
     short_ema = prices.ewm(span=short_window, adjust=False).mean()
@@ -166,3 +153,11 @@ def compute_macd(prices, short_window=12, long_window=26, signal_window=9):
     macd = short_ema - long_ema
     signal_line = macd.ewm(span=signal_window, adjust=False).mean()
     return macd, signal_line
+
+async def main():
+    print("🚀 Бот стартует...")
+    asyncio.create_task(start_futures_websocket())  
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
