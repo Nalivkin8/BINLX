@@ -20,6 +20,9 @@ dp = Dispatcher()
 active_trades = {}
 price_history = {"IPUSDT": [], "ADAUSDT": [], "ETHUSDT": [], "LTCUSDT": [], "ETCUSDT": []}
 
+# 🔹 Минимальный процент для TP и SL (чтобы не было копеечных значений)
+MIN_TP_SL_PERCENT = 0.002  # 0.2%
+
 # 🔹 Функции индикаторов
 def compute_rsi(prices, period=14):
     delta = prices.diff()
@@ -43,10 +46,10 @@ def compute_atr(prices, period=14):
 def compute_tp_sl(price, atr, signal, decimal_places):
     tp_multiplier = 3  
     sl_multiplier = 2  
-    min_step = price * 0.005  
+    min_tp_sl = price * MIN_TP_SL_PERCENT  
 
-    tp = price + max(tp_multiplier * atr, min_step) if signal == "LONG" else price - max(tp_multiplier * atr, min_step)
-    sl = price - max(sl_multiplier * atr, min_step) if signal == "LONG" else price + max(sl_multiplier * atr, min_step)
+    tp = price + max(tp_multiplier * atr, min_tp_sl) if signal == "LONG" else price - max(tp_multiplier * atr, min_tp_sl)
+    sl = price - max(sl_multiplier * atr, min_tp_sl) if signal == "LONG" else price + max(sl_multiplier * atr, min_tp_sl)
 
     return round(tp, decimal_places), round(sl, decimal_places)
 
@@ -85,9 +88,6 @@ def on_open(ws):
     ws.send(subscribe_message)
     print("📩 Подписка на Binance Futures")
 
-def format_pair(symbol):
-    return symbol.replace("USDT", "/USDT")
-
 def get_decimal_places(price):
     price_str = f"{price:.10f}".rstrip('0')
     return len(price_str.split('.')[1]) if '.' in price_str else 0
@@ -104,21 +104,22 @@ async def process_futures_message(message):
             if price <= 0.0:
                 return
 
-            print(f"📊 {format_pair(symbol)}: Текущая цена {price} USDT")
+            print(f"📊 {symbol}: Текущая цена {price} USDT")
 
             if symbol in active_trades:
                 trade = active_trades[symbol]
                 if (trade["signal"] == "LONG" and price >= trade["tp"]) or (trade["signal"] == "SHORT" and price <= trade["tp"]):
-                    await send_message_safe(f"✅ **{format_pair(symbol)} достиг Take Profit ({trade['tp']} USDT)** 🎯")
-                    del active_trades[symbol]
+                    del active_trades[symbol]  
+                    await send_message_safe(f"✅ **{format_symbol(symbol)} достиг Take Profit ({trade['tp']} USDT)** 🎯")
                     return  
-
                 if (trade["signal"] == "LONG" and price <= trade["sl"]) or (trade["signal"] == "SHORT" and price >= trade["sl"]):
-                    await send_message_safe(f"❌ **{format_pair(symbol)} достиг Stop Loss ({trade['sl']} USDT)** ⛔")
-                    del active_trades[symbol]
+                    if "sl_triggered" not in trade:  
+                        trade["sl_triggered"] = True
+                        del active_trades[symbol]  
+                        await send_message_safe(f"❌ **{format_symbol(symbol)} достиг Stop Loss ({trade['sl']} USDT)** ⛔")
                     return  
 
-                print(f"⚠️ Пропущен сигнал для {format_pair(symbol)} – активная сделка еще не закрыта")
+                print(f"⚠️ Пропущен сигнал для {symbol} – активная сделка еще не закрыта")
                 return  
 
             if symbol in price_history:
@@ -127,40 +128,46 @@ async def process_futures_message(message):
                 if len(price_history[symbol]) > 50:
                     price_history[symbol].pop(0)
 
-                    df = pd.DataFrame(price_history[symbol], columns=['close'])
+                df = pd.DataFrame(price_history[symbol], columns=['close'])
 
-                    if len(df) < 14:
-                        return  
+                if len(df) < 14:
+                    return  
 
-                    df['RSI'] = compute_rsi(df['close'])
-                    df['MACD'], df['Signal_Line'] = compute_macd(df['close'])
-                    df['ATR'] = compute_atr(df['close'])
+                df['RSI'] = compute_rsi(df['close'])
+                df['MACD'], df['Signal_Line'] = compute_macd(df['close'])
+                df['ATR'] = compute_atr(df['close'])
 
-                    last_rsi = df['RSI'].iloc[-1]
-                    last_macd = df['MACD'].iloc[-1]
-                    last_signal_line = df['Signal_Line'].iloc[-1]
-                    last_atr = df['ATR'].iloc[-1]
+                last_rsi = df['RSI'].iloc[-1]
+                last_macd = df['MACD'].iloc[-1]
+                last_signal_line = df['Signal_Line'].iloc[-1]
+                last_atr = df['ATR'].iloc[-1]
 
-                    signal = None
-                    emoji = ""
-                    if last_macd > last_signal_line and last_rsi < 50:
-                        signal = "LONG"
-                        emoji = "🟢"
-                    elif last_macd < last_signal_line and last_rsi > 50:
-                        signal = "SHORT"
-                        emoji = "🔴"
+                signal = None
+                if last_macd > last_signal_line and last_rsi < 50:
+                    signal = "LONG"
+                elif last_macd < last_signal_line and last_rsi > 50:
+                    signal = "SHORT"
 
-                    if signal:
-                        decimal_places = get_decimal_places(price)
-                        tp, sl = compute_tp_sl(price, last_atr, signal, decimal_places)
+                if signal:
+                    decimal_places = get_decimal_places(price)
+                    tp, sl = compute_tp_sl(price, last_atr, signal, decimal_places)
 
-                        active_trades[symbol] = {"signal": signal, "entry": price, "tp": tp, "sl": sl}
+                    active_trades[symbol] = {"signal": signal, "entry": price, "tp": tp, "sl": sl, "sl_triggered": False}
 
-                        message = f"{emoji} **{signal} {format_pair(symbol)}**\n🔹 Вход: {price:.{decimal_places}f} USDT\n🎯 TP: {tp:.{decimal_places}f} USDT\n⛔ SL: {sl:.{decimal_places}f} USDT"
-                        await send_message_safe(message)
+                    signal_emoji = "🟢" if signal == "LONG" else "🔴"
+                    message = (
+                        f"{signal_emoji} **{signal} {format_symbol(symbol)}**\n"
+                        f"🔹 **Вход**: {price:.{decimal_places}f} USDT\n"
+                        f"🎯 **TP**: {tp:.{decimal_places}f} USDT\n"
+                        f"⛔ **SL**: {sl:.{decimal_places}f} USDT"
+                    )
+                    await send_message_safe(message)
 
     except Exception as e:
         print(f"❌ Ошибка WebSocket: {e}")
+
+def format_symbol(symbol):
+    return symbol.replace("USDT", "/USDT")
 
 async def main():
     print("🚀 Бот стартует...")
