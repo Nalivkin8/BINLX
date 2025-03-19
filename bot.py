@@ -71,9 +71,25 @@ async def process_futures_message(message):
 
             print(f"📊 {symbol}: Текущая цена {price} USDT")
 
+            # 📌 Проверка активных сделок на TP/SL
+            if symbol in active_trades:
+                trade = active_trades[symbol]
+
+                # 🎯 Take Profit (TP)
+                if (trade["signal"] == "LONG" and price >= trade["tp"]) or (trade["signal"] == "SHORT" and price <= trade["tp"]):
+                    await send_message_safe(f"✅ **{symbol} достиг Take Profit ({trade['tp']} USDT)** 🎯")
+                    del active_trades[symbol]  # Удаляем активную сделку
+                    return  
+
+                # ⛔ Stop Loss (SL)
+                if (trade["signal"] == "LONG" and price <= trade["sl"]) or (trade["signal"] == "SHORT" and price >= trade["sl"]):
+                    await send_message_safe(f"❌ **{symbol} достиг Stop Loss ({trade['sl']} USDT)** ⛔")
+                    del active_trades[symbol]  # Удаляем активную сделку
+                    return  
+
             # **Фильтр сигналов** – новый сигнал даётся только после TP/SL
             if symbol in active_trades:
-                print(f"⚠️ Пропущен сигнал для {symbol} – активна сделка")
+                print(f"⚠️ Пропущен сигнал для {symbol} – активная сделка ещё не закрыта")
                 return  
 
             # Обновление истории цен
@@ -139,12 +155,10 @@ async def send_message_safe(message):
     except Exception as e:
         print(f"❌ Ошибка при отправке в Telegram: {e}")
 
-# 🔹 Динамический TP и SL на основе ATR (исправленный код)
+# 🔹 Функции индикаторов
 def compute_tp_sl(price, atr, signal, decimal_places):
     tp_multiplier = 3  
     sl_multiplier = 2  
-
-    # Минимальный шаг изменения TP/SL (не менее 0.5% от входа)
     min_step = price * 0.005  
 
     tp = price + max(tp_multiplier * atr, min_step) if signal == "LONG" else price - max(tp_multiplier * atr, min_step)
@@ -152,25 +166,12 @@ def compute_tp_sl(price, atr, signal, decimal_places):
 
     return round(tp, decimal_places), round(sl, decimal_places)
 
-# 🔹 Функции индикаторов
 def compute_rsi(prices, period=14):
     delta = prices.diff()
     gain = delta.where(delta > 0, 0).rolling(window=period).mean()
     loss = -delta.where(delta < 0, 0).rolling(window=period).mean()
     rs = gain / loss.replace(0, 1e-9)
     return 100 - (100 / (1 + rs))
-
-def compute_macd(prices, short_window=12, long_window=26, signal_window=9):
-    short_ema = prices.ewm(span=short_window, adjust=False).mean()
-    long_ema = prices.ewm(span=long_window, adjust=False).mean()
-    macd = short_ema - long_ema
-    signal_line = macd.ewm(span=signal_window, adjust=False).mean()
-    return macd, signal_line
-
-def compute_atr(prices, period=14):
-    tr = prices.diff().abs()
-    atr = tr.rolling(window=period).mean()
-    return atr
 
 async def main():
     print("🚀 Бот стартует...")
