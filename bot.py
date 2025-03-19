@@ -44,6 +44,9 @@ def compute_atr(prices, period=14):
     return atr
 
 def compute_tp_sl(price, atr, signal, decimal_places):
+    if pd.isna(atr) or atr == 0:  
+        atr = price * 0.002  # Если ATR `nan` или 0, ставим минимальное значение (0.2% от цены)
+    
     tp_multiplier = 5  
     sl_multiplier = 3  
     min_tp_sl = price * MIN_TP_SL_PERCENT  
