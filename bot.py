@@ -6,25 +6,21 @@ import pandas as pd
 from aiogram import Bot, Dispatcher
 from aiogram.exceptions import TelegramRetryAfter
 
-# 🔹 Загружаем переменные среды из Railway Variables
+# 🔹 Загружаем переменные среды
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 if not TELEGRAM_CHAT_ID:
     raise ValueError("❌ Ошибка: TELEGRAM_CHAT_ID не задан в Railway Variables!")
 
-# 🔹 Создаём бота и диспетчер
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
 
-# 🔹 Храним активные сделки (по парам)
+# 🔹 Активные сделки
 active_trades = {}
-price_history = {
-    "IPUSDT": [], "ADAUSDT": [], "ETHUSDT": [],
-    "LTCUSDT": [], "ETCUSDT": []
-}
+price_history = {"IPUSDT": [], "ADAUSDT": [], "ETHUSDT": [], "LTCUSDT": [], "ETCUSDT": []}
 
-# 🔹 Функция расчёта RSI
+# 🔹 Функции индикаторов
 def compute_rsi(prices, period=14):
     delta = prices.diff()
     gain = delta.where(delta > 0, 0).rolling(window=period).mean()
@@ -32,7 +28,6 @@ def compute_rsi(prices, period=14):
     rs = gain / loss.replace(0, 1e-9)  
     return 100 - (100 / (1 + rs))
 
-# 🔹 Функция расчёта MACD
 def compute_macd(prices, short_window=12, long_window=26, signal_window=9):
     short_ema = prices.ewm(span=short_window, adjust=False).mean()
     long_ema = prices.ewm(span=long_window, adjust=False).mean()
@@ -40,13 +35,11 @@ def compute_macd(prices, short_window=12, long_window=26, signal_window=9):
     signal_line = macd.ewm(span=signal_window, adjust=False).mean()
     return macd, signal_line
 
-# 🔹 Функция расчёта ATR
 def compute_atr(prices, period=14):
     tr = prices.diff().abs()
     atr = tr.rolling(window=period).mean()
     return atr
 
-# 🔹 Функция расчёта TP и SL
 def compute_tp_sl(price, atr, signal, decimal_places):
     tp_multiplier = 3  
     sl_multiplier = 2  
@@ -57,7 +50,6 @@ def compute_tp_sl(price, atr, signal, decimal_places):
 
     return round(tp, decimal_places), round(sl, decimal_places)
 
-# 🔹 Функция безопасной отправки сообщений в Telegram
 async def send_message_safe(message):
     try:
         print(f"📤 Отправка в Telegram: {message}")
@@ -69,7 +61,6 @@ async def send_message_safe(message):
     except Exception as e:
         print(f"❌ Ошибка Telegram: {e}")
 
-# 🔹 Запуск WebSocket
 async def start_futures_websocket():
     print("🔄 Запуск WebSocket Binance Futures...")
     loop = asyncio.get_event_loop()
@@ -81,7 +72,6 @@ async def start_futures_websocket():
     print("⏳ Ожидание подключения к WebSocket...")
     await asyncio.to_thread(ws.run_forever)
 
-# 🔹 Подписка на Binance Futures
 def on_open(ws):
     print("✅ Успешное подключение к WebSocket!")
     subscribe_message = json.dumps({
@@ -95,12 +85,10 @@ def on_open(ws):
     ws.send(subscribe_message)
     print("📩 Подписка на Binance Futures")
 
-# 🔹 Определяем количество знаков после запятой
 def get_decimal_places(price):
     price_str = f"{price:.10f}".rstrip('0')
     return len(price_str.split('.')[1]) if '.' in price_str else 0
 
-# 🔹 Обрабатываем входящие данные WebSocket
 async def process_futures_message(message):
     global active_trades, price_history
     try:
@@ -115,22 +103,21 @@ async def process_futures_message(message):
 
             print(f"📊 {symbol}: Текущая цена {price} USDT")
 
+            # ✅ **Проверка активной сделки перед отправкой нового сигнала**
             if symbol in active_trades:
                 trade = active_trades[symbol]
                 if (trade["signal"] == "LONG" and price >= trade["tp"]) or (trade["signal"] == "SHORT" and price <= trade["tp"]):
                     await send_message_safe(f"✅ **{symbol} достиг Take Profit ({trade['tp']} USDT)** 🎯")
                     del active_trades[symbol]
                     return  
-
                 if (trade["signal"] == "LONG" and price <= trade["sl"]) or (trade["signal"] == "SHORT" and price >= trade["sl"]):
                     await send_message_safe(f"❌ **{symbol} достиг Stop Loss ({trade['sl']} USDT)** ⛔")
                     del active_trades[symbol]
                     return  
-
-            if symbol in active_trades:
-                print(f"⚠️ Пропущен сигнал для {symbol} – активная сделка ещё не закрыта")
+                print(f"⚠️ Пропущен сигнал для {symbol} – активная сделка еще не закрыта")
                 return  
 
+            # 🔹 Обновление истории цен
             if symbol in price_history:
                 price_history[symbol].append(price)
 
@@ -161,7 +148,9 @@ async def process_futures_message(message):
                         decimal_places = get_decimal_places(price)
                         tp, sl = compute_tp_sl(price, last_atr, signal, decimal_places)
 
-                        message = f"**{signal} {symbol}**\n🔹 Вход: {price} USDT\n🎯 TP: {tp} USDT\n⛔ SL: {sl} USDT"
+                        active_trades[symbol] = {"signal": signal, "entry": price, "tp": tp, "sl": sl}
+
+                        message = f"**{signal} {symbol}**\n🔹 Вход: {price:.{decimal_places}f} USDT\n🎯 TP: {tp:.{decimal_places}f} USDT\n⛔ SL: {sl:.{decimal_places}f} USDT"
                         await send_message_safe(message)
 
     except Exception as e:
