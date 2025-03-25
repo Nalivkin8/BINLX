@@ -17,7 +17,7 @@ bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
 router = Router()
 
-PAIR = "IPUSDT"
+PAIR = "ETHUSDT"
 MIN_TP_SL_PERCENT = 0.005
 TP_MULTIPLIER = 5
 SL_MULTIPLIER = 3
