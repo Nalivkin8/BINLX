@@ -131,18 +131,24 @@ async def process_futures_message(message):
 
             if symbol in active_trades:
                 trade = active_trades[symbol]
-                if (trade["signal"] == "LONG" and price >= trade["tp"]) or (trade["signal"] == "SHORT" and price <= trade["tp"]):
+                if (trade["signal"] == "LONG" and price >= trade["tp"]) or \
+                   (trade["signal"] == "SHORT" and price <= trade["tp"]):
                     del active_trades[symbol]
                     total_trades += 1
                     tp_count += 1
                     await send_message_safe(f"✅ **{format_symbol(symbol)} достиг TP ({trade['tp']:.{decimal_places}f} USDT)** 🎯")
                     return
-                if (trade["signal"] == "LONG" and price <= trade["sl"]) or (trade["signal"] == "SHORT" and price >= trade["sl"]):
+
+                if (trade["signal"] == "LONG" and price <= trade["sl"]) or \
+                   (trade["signal"] == "SHORT" and price >= trade["sl"]):
                     del active_trades[symbol]
                     total_trades += 1
                     sl_count += 1
                     await send_message_safe(f"❌ **{format_symbol(symbol)} достиг SL ({trade['sl']:.{decimal_places}f} USDT)** ⛔")
                     return
+
+                # 👉 Блокируем новые сигналы пока сделка активна
+                print(f"⚠️ {symbol}: сделка активна, сигнал не даём")
                 return
 
             price_history[symbol].append(price)
@@ -166,12 +172,11 @@ async def process_futures_message(message):
 
             if pd.isna(last_rsi) or pd.isna(last_macd) or pd.isna(last_signal) or pd.isna(last_atr):
                 return
-
             if last_atr < ATR_MIN:
                 print("⛔ ATR слишком низкий для скальпинга")
                 return
             if last_atr > ATR_MAX:
-                print("⚠️ ATR слишком высокий — может быть резкий рынок")
+                print("⚠️ ATR слишком высокий — рынок нестабилен")
                 return
             if abs(last_macd - last_signal) < 0.002:
                 print("⛔ MACD разница слишком мала")
@@ -184,7 +189,7 @@ async def process_futures_message(message):
                 signal = "SHORT"
 
             if not signal:
-                print("⛔ Условия для входа не выполнены")
+                print("⛔ Условия для сигнала не выполнены")
                 return
 
             tp, sl = compute_tp_sl(price, last_atr, signal, decimal_places)
@@ -202,7 +207,7 @@ async def process_futures_message(message):
         print(f"❌ Ошибка обработки: {e}")
 
 async def main():
-    print("🚀 Бот запущен (Cкальпинг ATR)")
+    print("🚀 Бот запущен (ETHUSDT + TP/SL + фильтр ATR)")
     dp.include_router(router)
     asyncio.create_task(start_futures_websocket())
     await dp.start_polling(bot)
