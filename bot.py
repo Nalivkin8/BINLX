@@ -124,8 +124,6 @@ async def process_futures_message(message):
             if price <= 0:
                 return
 
-            print(f"📊 {symbol}: {price:.{decimal_places}f} USDT")
-
             price_history[symbol].append(price)
             if len(price_history[symbol]) > 50:
                 price_history[symbol].pop(0)
@@ -149,7 +147,7 @@ async def process_futures_message(message):
             if symbol in active_trades:
                 trade = active_trades[symbol]
 
-                # TP/SL проверка
+                # TP/SL
                 if (trade["signal"] == "LONG" and price >= trade["tp"]) or \
                    (trade["signal"] == "SHORT" and price <= trade["tp"]):
                     del active_trades[symbol]
@@ -166,17 +164,18 @@ async def process_futures_message(message):
                     await send_message_safe(f"❌ **{format_symbol(symbol)} достиг SL ({trade['sl']:.{decimal_places}f} USDT)** ⛔")
                     return
 
-                # 🔍 Проверка на смену тренда
-                if trade["signal"] == "LONG":
-                    if last_macd < last_signal and last_rsi > 50:
-                        await send_message_safe(f"⚠️ Возможна смена тренда на SHORT для {format_symbol(symbol)}")
-                elif trade["signal"] == "SHORT":
-                    if last_macd > last_signal and last_rsi < 50:
-                        await send_message_safe(f"⚠️ Возможна смена тренда на LONG для {format_symbol(symbol)}")
+                # ⚠️ Проверка обоснованной смены тренда
+                if not trade.get("trend_warning_sent", False):
+                    if trade["signal"] == "LONG":
+                        if last_macd < last_signal and (last_signal - last_macd) > 0.002 and last_rsi > 55:
+                            await send_message_safe(f"⚠️ Возможна смена тренда на SHORT для {format_symbol(symbol)}")
+                            trade["trend_warning_sent"] = True
+                    elif trade["signal"] == "SHORT":
+                        if last_macd > last_signal and (last_macd - last_signal) > 0.002 and last_rsi < 45:
+                            await send_message_safe(f"⚠️ Возможна смена тренда на LONG для {format_symbol(symbol)}")
+                            trade["trend_warning_sent"] = True
+                return
 
-                return  # Не открываем новый сигнал пока активен
-
-            # 🎯 Условия нового сигнала
             if last_atr < ATR_MIN or last_atr > ATR_MAX:
                 return
             if abs(last_macd - last_signal) < 0.002:
@@ -192,7 +191,13 @@ async def process_futures_message(message):
                 return
 
             tp, sl = compute_tp_sl(price, last_atr, signal, decimal_places)
-            active_trades[symbol] = {"signal": signal, "entry": price, "tp": tp, "sl": sl}
+            active_trades[symbol] = {
+                "signal": signal,
+                "entry": price,
+                "tp": tp,
+                "sl": sl,
+                "trend_warning_sent": False  # для предупреждений
+            }
 
             emoji = "🟢" if signal == "LONG" else "🔴"
             await send_message_safe(
@@ -206,7 +211,7 @@ async def process_futures_message(message):
         print(f"❌ Ошибка обработки: {e}")
 
 async def main():
-    print("🚀 Бот запущен (ETHUSDT + анализ смены тренда)")
+    print("🚀 Бот запущен (ETHUSDT + смена тренда + защита от спама)")
     dp.include_router(router)
     asyncio.create_task(start_futures_websocket())
     await dp.start_polling(bot)
