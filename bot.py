@@ -202,7 +202,7 @@ async def process_futures_message(message):
         print(f"❌ Ошибка обработки: {e}")
 
 async def main():
-    print("🚀 Бот запущен (IPUSDT + скальпинг ATR)")
+    print("🚀 Бот запущен (Cкальпинг ATR)")
     dp.include_router(router)
     asyncio.create_task(start_futures_websocket())
     await dp.start_polling(bot)
