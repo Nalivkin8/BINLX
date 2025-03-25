@@ -5,6 +5,8 @@ import os
 import pandas as pd
 from aiogram import Bot, Dispatcher, types
 from aiogram.exceptions import TelegramRetryAfter
+from aiogram.filters import Command
+from aiogram import Router
 
 # 🔹 Переменные среды
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -15,6 +17,7 @@ if not TELEGRAM_CHAT_ID:
 
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
+router = Router()
 
 # 🔹 Настройки
 PAIR = "IPUSDT"
@@ -76,8 +79,8 @@ async def send_message_safe(message):
     except Exception as e:
         print(f"❌ Ошибка Telegram: {e}")
 
-# 🔹 Обработка команды /отчет
-@dp.message(commands=["отчет", "report"])
+# 🔹 Команда /отчет (aiogram 3.x)
+@router.message(Command(commands=["отчет", "report"]))
 async def report_handler(message: types.Message):
     global total_trades, tp_count, sl_count
     if total_trades == 0:
@@ -206,7 +209,8 @@ async def process_futures_message(message):
 
 # 🔹 Запуск
 async def main():
-    print("🚀 Бот запущен (IPUSDT + статистика TP/SL)")
+    print("🚀 Бот запущен (IPUSDT + отчет TP/SL)")
+    dp.include_router(router)  # ✅ подключаем router
     asyncio.create_task(start_futures_websocket())
     await dp.start_polling(bot)
 
