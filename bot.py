@@ -172,45 +172,50 @@ async def process_futures_message(message):
             last_signal = df['Signal_Line'].iloc[-1]
             last_atr = df['ATR'].iloc[-1]
 
+            print(f"🔍 RSI: {last_rsi:.2f}, MACD: {last_macd:.6f}, Signal: {last_signal:.6f}, ATR: {last_atr:.6f}")
+
             if pd.isna(last_rsi) or pd.isna(last_macd) or pd.isna(last_signal) or pd.isna(last_atr):
                 return
-            if last_atr < price * 0.001:
+            if last_atr < price * 0.0005:
+                print("⛔ ATR слишком маленький")
                 return
-            if 48 <= last_rsi <= 52:
-                return
-            if abs(last_macd - last_signal) < 0.005:
+            if abs(last_macd - last_signal) < 0.002:
+                print("⛔ MACD разница слишком мала")
                 return
 
             signal = None
-            if last_macd > last_signal and last_rsi < 55:
+            if last_macd > last_signal and last_rsi < 60:
                 signal = "LONG"
-            elif last_macd < last_signal and last_rsi > 45:
+            elif last_macd < last_signal and last_rsi > 40:
                 signal = "SHORT"
 
-            if signal:
-                tp, sl = compute_tp_sl(price, last_atr, signal, decimal_places)
+            if not signal:
+                print("⛔ Условия для входа не выполнены")
+                return
 
-                active_trades[symbol] = {
-                    "signal": signal,
-                    "entry": price,
-                    "tp": tp,
-                    "sl": sl
-                }
+            tp, sl = compute_tp_sl(price, last_atr, signal, decimal_places)
 
-                emoji = "🟢" if signal == "LONG" else "🔴"
-                await send_message_safe(
-                    f"{emoji} **{signal} {format_symbol(symbol)}**\n"
-                    f"🔹 **Вход**: {price:.{decimal_places}f} USDT\n"
-                    f"🎯 **TP**: {tp:.{decimal_places}f} USDT\n"
-                    f"⛔ **SL**: {sl:.{decimal_places}f} USDT"
-                )
+            active_trades[symbol] = {
+                "signal": signal,
+                "entry": price,
+                "tp": tp,
+                "sl": sl
+            }
+
+            emoji = "🟢" if signal == "LONG" else "🔴"
+            await send_message_safe(
+                f"{emoji} **{signal} {format_symbol(symbol)}**\n"
+                f"🔹 **Вход**: {price:.{decimal_places}f} USDT\n"
+                f"🎯 **TP**: {tp:.{decimal_places}f} USDT\n"
+                f"⛔ **SL**: {sl:.{decimal_places}f} USDT"
+            )
 
     except Exception as e:
         print(f"❌ Ошибка обработки: {e}")
 
 # 🔹 Запуск
 async def main():
-    print("🚀 Бот запущен (IPUSDT + точные цены + отчёт)")
+    print("🚀 Бот запущен (IPUSDT + точные цены + отчёт + отладка)")
     dp.include_router(router)
     asyncio.create_task(start_futures_websocket())
     await dp.start_polling(bot)
