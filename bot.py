@@ -60,9 +60,10 @@ def compute_tp_sl(price, atr, signal, decimal_places):
     sl = price - max(SL_MULTIPLIER * atr, min_tp_sl) if signal == "LONG" else price + max(SL_MULTIPLIER * atr, min_tp_sl)
     return round(tp, decimal_places), round(sl, decimal_places)
 
-def get_decimal_places(price):
-    price_str = f"{price:.10f}".rstrip('0')
-    return len(price_str.split('.')[1]) if '.' in price_str else 0
+def get_decimal_places_from_string(price_str):
+    if '.' in price_str:
+        return len(price_str.split('.')[1])
+    return 0
 
 def format_symbol(symbol):
     return symbol.replace("USDT", "/USDT")
@@ -125,8 +126,9 @@ async def process_futures_message(message):
         data = json.loads(message)
         if 's' in data and 'p' in data:
             symbol = data['s']
-            price = float(data['p'])
-            decimal_places = get_decimal_places(price)  # 📌 Получаем разрядность сразу
+            price_str = data['p']
+            price = float(price_str)
+            decimal_places = get_decimal_places_from_string(price_str)
 
             if price <= 0:
                 return
@@ -208,7 +210,7 @@ async def process_futures_message(message):
 
 # 🔹 Запуск
 async def main():
-    print("🚀 Бот запущен (IPUSDT + точность + отчёт)")
+    print("🚀 Бот запущен (IPUSDT + точные цены + отчёт)")
     dp.include_router(router)
     asyncio.create_task(start_futures_websocket())
     await dp.start_polling(bot)
