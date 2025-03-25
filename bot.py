@@ -68,7 +68,6 @@ def format_symbol(symbol):
 
 async def send_message_safe(message):
     try:
-        print(f"📤 Telegram: {message}")
         await bot.send_message(TELEGRAM_CHAT_ID, message)
     except TelegramRetryAfter as e:
         await asyncio.sleep(e.retry_after)
@@ -78,7 +77,6 @@ async def send_message_safe(message):
 
 @router.message(Command(commands=["отчет", "report"]))
 async def report_handler(message: types.Message):
-    global total_trades, tp_count, sl_count
     if total_trades == 0:
         await message.answer("📊 Пока нет завершённых сделок.")
         return
@@ -97,7 +95,6 @@ async def report_handler(message: types.Message):
 async def start_futures_websocket():
     while True:
         try:
-            print("🔄 Подключение к WebSocket Binance Futures...")
             loop = asyncio.get_event_loop()
             ws = websocket.WebSocketApp(
                 "wss://fstream.binance.com/ws",
@@ -129,28 +126,6 @@ async def process_futures_message(message):
 
             print(f"📊 {symbol}: {price:.{decimal_places}f} USDT")
 
-            if symbol in active_trades:
-                trade = active_trades[symbol]
-                if (trade["signal"] == "LONG" and price >= trade["tp"]) or \
-                   (trade["signal"] == "SHORT" and price <= trade["tp"]):
-                    del active_trades[symbol]
-                    total_trades += 1
-                    tp_count += 1
-                    await send_message_safe(f"✅ **{format_symbol(symbol)} достиг TP ({trade['tp']:.{decimal_places}f} USDT)** 🎯")
-                    return
-
-                if (trade["signal"] == "LONG" and price <= trade["sl"]) or \
-                   (trade["signal"] == "SHORT" and price >= trade["sl"]):
-                    del active_trades[symbol]
-                    total_trades += 1
-                    sl_count += 1
-                    await send_message_safe(f"❌ **{format_symbol(symbol)} достиг SL ({trade['sl']:.{decimal_places}f} USDT)** ⛔")
-                    return
-
-                # 👉 Блокируем новые сигналы пока сделка активна
-                print(f"⚠️ {symbol}: сделка активна, сигнал не даём")
-                return
-
             price_history[symbol].append(price)
             if len(price_history[symbol]) > 50:
                 price_history[symbol].pop(0)
@@ -168,18 +143,43 @@ async def process_futures_message(message):
             last_signal = df['Signal_Line'].iloc[-1]
             last_atr = df['ATR'].iloc[-1]
 
-            print(f"🔍 RSI: {last_rsi:.2f}, MACD: {last_macd:.6f}, Signal: {last_signal:.6f}, ATR: {last_atr:.6f}")
-
             if pd.isna(last_rsi) or pd.isna(last_macd) or pd.isna(last_signal) or pd.isna(last_atr):
                 return
-            if last_atr < ATR_MIN:
-                print("⛔ ATR слишком низкий для скальпинга")
-                return
-            if last_atr > ATR_MAX:
-                print("⚠️ ATR слишком высокий — рынок нестабилен")
+
+            if symbol in active_trades:
+                trade = active_trades[symbol]
+
+                # TP/SL проверка
+                if (trade["signal"] == "LONG" and price >= trade["tp"]) or \
+                   (trade["signal"] == "SHORT" and price <= trade["tp"]):
+                    del active_trades[symbol]
+                    total_trades += 1
+                    tp_count += 1
+                    await send_message_safe(f"✅ **{format_symbol(symbol)} достиг TP ({trade['tp']:.{decimal_places}f} USDT)** 🎯")
+                    return
+
+                if (trade["signal"] == "LONG" and price <= trade["sl"]) or \
+                   (trade["signal"] == "SHORT" and price >= trade["sl"]):
+                    del active_trades[symbol]
+                    total_trades += 1
+                    sl_count += 1
+                    await send_message_safe(f"❌ **{format_symbol(symbol)} достиг SL ({trade['sl']:.{decimal_places}f} USDT)** ⛔")
+                    return
+
+                # 🔍 Проверка на смену тренда
+                if trade["signal"] == "LONG":
+                    if last_macd < last_signal and last_rsi > 50:
+                        await send_message_safe(f"⚠️ Возможна смена тренда на SHORT для {format_symbol(symbol)}")
+                elif trade["signal"] == "SHORT":
+                    if last_macd > last_signal and last_rsi < 50:
+                        await send_message_safe(f"⚠️ Возможна смена тренда на LONG для {format_symbol(symbol)}")
+
+                return  # Не открываем новый сигнал пока активен
+
+            # 🎯 Условия нового сигнала
+            if last_atr < ATR_MIN or last_atr > ATR_MAX:
                 return
             if abs(last_macd - last_signal) < 0.002:
-                print("⛔ MACD разница слишком мала")
                 return
 
             signal = None
@@ -189,7 +189,6 @@ async def process_futures_message(message):
                 signal = "SHORT"
 
             if not signal:
-                print("⛔ Условия для сигнала не выполнены")
                 return
 
             tp, sl = compute_tp_sl(price, last_atr, signal, decimal_places)
@@ -207,7 +206,7 @@ async def process_futures_message(message):
         print(f"❌ Ошибка обработки: {e}")
 
 async def main():
-    print("🚀 Бот запущен (ETHUSDT + TP/SL + фильтр ATR)")
+    print("🚀 Бот запущен (ETHUSDT + анализ смены тренда)")
     dp.include_router(router)
     asyncio.create_task(start_futures_websocket())
     await dp.start_polling(bot)
