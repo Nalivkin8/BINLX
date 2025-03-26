@@ -162,7 +162,6 @@ async def process_futures_message(message):
                     sl_count += 1
                     await send_message_safe(f"❌ **{format_symbol(symbol)} достиг SL ({trade['sl']:.{decimal_places}f} USDT)** ⛔")
                     return
-                print(f"⚠️ {symbol}: сделка активна, сигнал не даём")
                 return
 
             price_history[symbol].append(price)
@@ -212,7 +211,7 @@ async def process_futures_message(message):
         print(f"❌ Ошибка обработки: {e}")
 
 async def main():
-    print("🚀 Бот запущен (ETHUSDT + TP/SL + кнопки)")
+    print("🚀 Бот запущен (ETHUSDT + TP/SL + кнопки + форматирование)")
     dp.include_router(router)
     asyncio.create_task(start_futures_websocket())
     await dp.start_polling(bot)
