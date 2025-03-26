@@ -3,10 +3,10 @@ import json
 import asyncio
 import os
 import pandas as pd
-from aiogram import Bot, Dispatcher, types
+from aiogram import Bot, Dispatcher, types, Router, F
 from aiogram.filters import Command
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.exceptions import TelegramRetryAfter
-from aiogram import Router
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
@@ -66,13 +66,37 @@ def get_decimal_places_from_string(price_str):
 def format_symbol(symbol):
     return symbol.replace("USDT", "/USDT")
 
-async def send_message_safe(message):
+def get_trade_keyboard():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Вышел по TP", callback_data="manual_tp"),
+         InlineKeyboardButton(text="❌ Вышел по SL", callback_data="manual_sl")]
+    ])
+
+@router.callback_query(F.data.in_({"manual_tp", "manual_sl"}))
+async def manual_exit_handler(callback: types.CallbackQuery):
+    global total_trades, tp_count, sl_count
+    symbol = PAIR
+    trade = active_trades.get(symbol)
+    if trade:
+        if callback.data == "manual_tp":
+            tp_count += 1
+            text = f"✅ Сделка по {format_symbol(symbol)} вручную закрыта как TP"
+        else:
+            sl_count += 1
+            text = f"❌ Сделка по {format_symbol(symbol)} вручную закрыта как SL"
+        total_trades += 1
+        del active_trades[symbol]
+        await callback.message.edit_reply_markup(reply_markup=None)
+        await callback.message.answer(text)
+    await callback.answer()
+
+async def send_message_safe(message, reply_markup=None):
     try:
         print(f"📤 Telegram: {message}")
-        await bot.send_message(TELEGRAM_CHAT_ID, message)
+        await bot.send_message(TELEGRAM_CHAT_ID, message, reply_markup=reply_markup)
     except TelegramRetryAfter as e:
         await asyncio.sleep(e.retry_after)
-        await send_message_safe(message)
+        await send_message_safe(message, reply_markup)
     except Exception as e:
         print(f"❌ Ошибка Telegram: {e}")
 
@@ -82,14 +106,12 @@ async def report_handler(message: types.Message):
     if total_trades == 0:
         await message.answer("📊 Пока нет завершённых сделок.")
         return
-
     tp_percent = round((tp_count / total_trades) * 100, 1)
     sl_percent = round((sl_count / total_trades) * 100, 1)
-
     report = (
-        f"📊 Отчет по {format_symbol(PAIR)}\n"
-        f"Всего сделок: {total_trades}\n"
-        f"🎯 TP: {tp_count} ({tp_percent}%)\n"
+        f"📊 Отчет по {format_symbol(PAIR)}"
+        f"Всего сделок: {total_trades}"
+        f"🎯 TP: {tp_count} ({tp_percent}%)"
         f"⛔ SL: {sl_count} ({sl_percent}%)"
     )
     await message.answer(report)
@@ -115,7 +137,6 @@ async def start_futures_websocket():
 
 async def process_futures_message(message):
     global total_trades, tp_count, sl_count
-
     try:
         data = json.loads(message)
         if 's' in data and 'p' in data:
@@ -123,31 +144,24 @@ async def process_futures_message(message):
             price_str = data['p']
             price = float(price_str)
             decimal_places = get_decimal_places_from_string(price_str)
-
             if price <= 0:
                 return
-
             print(f"📊 {symbol}: {price:.{decimal_places}f} USDT")
 
             if symbol in active_trades:
                 trade = active_trades[symbol]
-                if (trade["signal"] == "LONG" and price >= trade["tp"]) or \
-                   (trade["signal"] == "SHORT" and price <= trade["tp"]):
+                if (trade["signal"] == "LONG" and price >= trade["tp"]) or                    (trade["signal"] == "SHORT" and price <= trade["tp"]):
                     del active_trades[symbol]
                     total_trades += 1
                     tp_count += 1
                     await send_message_safe(f"✅ **{format_symbol(symbol)} достиг TP ({trade['tp']:.{decimal_places}f} USDT)** 🎯")
                     return
-
-                if (trade["signal"] == "LONG" and price <= trade["sl"]) or \
-                   (trade["signal"] == "SHORT" and price >= trade["sl"]):
+                if (trade["signal"] == "LONG" and price <= trade["sl"]) or                    (trade["signal"] == "SHORT" and price >= trade["sl"]):
                     del active_trades[symbol]
                     total_trades += 1
                     sl_count += 1
                     await send_message_safe(f"❌ **{format_symbol(symbol)} достиг SL ({trade['sl']:.{decimal_places}f} USDT)** ⛔")
                     return
-
-                # 👉 Блокируем новые сигналы пока сделка активна
                 print(f"⚠️ {symbol}: сделка активна, сигнал не даём")
                 return
 
@@ -158,7 +172,6 @@ async def process_futures_message(message):
             df = pd.DataFrame(price_history[symbol], columns=['close'])
             if len(df) < 14:
                 return
-
             df['RSI'] = compute_rsi(df['close'])
             df['MACD'], df['Signal_Line'] = compute_macd(df['close'])
             df['ATR'] = compute_atr(df['close'])
@@ -168,18 +181,11 @@ async def process_futures_message(message):
             last_signal = df['Signal_Line'].iloc[-1]
             last_atr = df['ATR'].iloc[-1]
 
-            print(f"🔍 RSI: {last_rsi:.2f}, MACD: {last_macd:.6f}, Signal: {last_signal:.6f}, ATR: {last_atr:.6f}")
-
             if pd.isna(last_rsi) or pd.isna(last_macd) or pd.isna(last_signal) or pd.isna(last_atr):
                 return
-            if last_atr < ATR_MIN:
-                print("⛔ ATR слишком низкий для скальпинга")
-                return
-            if last_atr > ATR_MAX:
-                print("⚠️ ATR слишком высокий — рынок нестабилен")
+            if last_atr < ATR_MIN or last_atr > ATR_MAX:
                 return
             if abs(last_macd - last_signal) < 0.002:
-                print("⛔ MACD разница слишком мала")
                 return
 
             signal = None
@@ -187,9 +193,7 @@ async def process_futures_message(message):
                 signal = "LONG"
             elif last_macd < last_signal and last_rsi > 40:
                 signal = "SHORT"
-
             if not signal:
-                print("⛔ Условия для сигнала не выполнены")
                 return
 
             tp, sl = compute_tp_sl(price, last_atr, signal, decimal_places)
@@ -197,17 +201,18 @@ async def process_futures_message(message):
 
             emoji = "🟢" if signal == "LONG" else "🔴"
             await send_message_safe(
-                f"{emoji} **{signal} {format_symbol(symbol)}**\n"
-                f"🔹 **Вход**: {price:.{decimal_places}f} USDT\n"
-                f"🎯 **TP**: {tp:.{decimal_places}f} USDT\n"
-                f"⛔ **SL**: {sl:.{decimal_places}f} USDT"
+                f"{emoji} **{signal} {format_symbol(symbol)}**"
+                f"🔹 **Вход**: {price:.{decimal_places}f} USDT"
+                f"🎯 **TP**: {tp:.{decimal_places}f} USDT"
+                f"⛔ **SL**: {sl:.{decimal_places}f} USDT",
+                reply_markup=get_trade_keyboard()
             )
 
     except Exception as e:
         print(f"❌ Ошибка обработки: {e}")
 
 async def main():
-    print("🚀 Бот запущен (ETHUSDT + TP/SL + фильтр ATR)")
+    print("🚀 Бот запущен (ETHUSDT + TP/SL + кнопки)")
     dp.include_router(router)
     asyncio.create_task(start_futures_websocket())
     await dp.start_polling(bot)
