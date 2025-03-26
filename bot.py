@@ -90,12 +90,9 @@ async def report_handler(message: types.Message):
     sl_percent = round((sl_count / total_trades) * 100, 1)
 
     report = (
-        f"📊 Отчет по {format_symbol(PAIR)}
-"
-        f"Всего сделок: {total_trades}
-"
-        f"🎯 TP: {tp_count} ({tp_percent}%)
-"
+        f"📊 Отчет по {format_symbol(PAIR)}"
+        f"Всего сделок: {total_trades}"
+        f"🎯 TP: {tp_count} ({tp_percent}%)"
         f"⛔ SL: {sl_count} ({sl_percent}%)"
     )
 
