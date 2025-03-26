@@ -164,14 +164,32 @@ async def process_futures_message(message):
             if pd.isna(last_rsi) or pd.isna(last_macd) or pd.isna(last_signal) or pd.isna(last_atr):
                 return
 
+            
             if symbol in active_trades:
                 trade = active_trades[symbol]
-                if (trade["signal"] == "LONG" and price >= trade["tp"]) or                    (trade["signal"] == "SHORT" and price <= trade["tp"]):
+                if (trade["signal"] == "LONG" and price >= trade["tp"]) or \
+                   (trade["signal"] == "SHORT" and price <= trade["tp"]):
                     del active_trades[symbol]
                     total_trades += 1
                     tp_count += 1
                     await send_message_safe(f"✅ {format_symbol(symbol)} достиг TP ({trade['tp']:.{decimal_places}f} USDT)")
                     return
+                if (trade["signal"] == "LONG" and price <= trade["sl"]) or \
+                   (trade["signal"] == "SHORT" and price >= trade["sl"]):
+                    del active_trades[symbol]
+                    total_trades += 1
+                    sl_count += 1
+                    await send_message_safe(f"❌ {format_symbol(symbol)} достиг SL ({trade['sl']:.{decimal_places}f} USDT)")
+                    return
+                if not trade.get("trend_warning_sent"):
+                    if trade["signal"] == "LONG" and last_macd < last_signal and (last_signal - last_macd) > 0.002 and last_rsi > 55:
+                        await send_message_safe(f"⚠️ Возможна смена тренда на SHORT для {format_symbol(symbol)}")
+                        trade["trend_warning_sent"] = True
+                    elif trade["signal"] == "SHORT" and last_macd > last_signal and (last_macd - last_signal) > 0.002 and last_rsi < 45:
+                        await send_message_safe(f"⚠️ Возможна смена тренда на LONG для {format_symbol(symbol)}")
+                        trade["trend_warning_sent"] = True
+                return  # 🚫 Новый сигнал не создаётся
+
                 if (trade["signal"] == "LONG" and price <= trade["sl"]) or                    (trade["signal"] == "SHORT" and price >= trade["sl"]):
                     del active_trades[symbol]
                     total_trades += 1
