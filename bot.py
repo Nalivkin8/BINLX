@@ -201,12 +201,9 @@ async def process_futures_message(message):
             tp, sl = compute_tp_sl(price, last_atr, signal, decimal_places)
             emoji = "🟢" if signal == "LONG" else "🔴"
             msg_text = (
-                f"{emoji} **{signal} {format_symbol(symbol)}**
-"
-                f"🔹 Вход: {price:.{decimal_places}f} USDT
-"
-                f"🎯 TP: {tp:.{decimal_places}f} USDT
-"
+                f"{emoji} **{signal} {format_symbol(symbol)}**"
+                f"🔹 Вход: {price:.{decimal_places}f} USDT"
+                f"🎯 TP: {tp:.{decimal_places}f} USDT"
                 f"⛔ SL: {sl:.{decimal_places}f} USDT"
             )
             message_id = await send_message_safe(msg_text, reply_markup=get_trade_keyboard())
