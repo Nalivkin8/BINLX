@@ -96,7 +96,13 @@ async def send_message_safe(message, reply_markup=None):
         await bot.send_message(TELEGRAM_CHAT_ID, message, reply_markup=reply_markup)
     except TelegramRetryAfter as e:
         await asyncio.sleep(e.retry_after)
-        await send_message_safe(message, reply_markup)
+await send_message_safe(
+    f"{emoji} **{signal} {format_symbol(symbol)}**\n"
+    f"🔹 **Вход**: {price:.{decimal_places}f} USDT\n"
+    f"🎯 **TP**: {tp:.{decimal_places}f} USDT\n"
+    f"⛔ **SL**: {sl:.{decimal_places}f} USDT",
+    reply_markup=get_trade_keyboard()
+)
     except Exception as e:
         print(f"❌ Ошибка Telegram: {e}")
 
