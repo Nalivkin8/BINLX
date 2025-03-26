@@ -26,11 +26,11 @@ ATR_MAX = 0.05
 
 price_history = {PAIR: []}
 active_trades = {}
-
 total_trades = 0
 tp_count = 0
 sl_count = 0
 
+# === Индикаторы ===
 def compute_rsi(prices, period=14):
     delta = prices.diff()
     gain = delta.where(delta > 0, 0).rolling(window=period).mean()
@@ -59,9 +59,7 @@ def compute_tp_sl(price, atr, signal, decimal_places):
     return round(tp, decimal_places), round(sl, decimal_places)
 
 def get_decimal_places_from_string(price_str):
-    if '.' in price_str:
-        return len(price_str.split('.')[1])
-    return 0
+    return len(price_str.split('.')[1]) if '.' in price_str else 0
 
 def format_symbol(symbol):
     return symbol.replace("USDT", "/USDT")
@@ -72,6 +70,7 @@ def get_trade_keyboard():
          InlineKeyboardButton(text="❌ Вышел по SL", callback_data="manual_sl")]
     ])
 
+# === Обработчик ручного выхода ===
 @router.callback_query(F.data.in_({"manual_tp", "manual_sl"}))
 async def manual_exit_handler(callback: types.CallbackQuery):
     global total_trades, tp_count, sl_count
@@ -90,46 +89,39 @@ async def manual_exit_handler(callback: types.CallbackQuery):
         await callback.message.answer(text)
     await callback.answer()
 
+# === Безопасная отправка сообщений ===
 async def send_message_safe(message, reply_markup=None):
     try:
-        print(f"📤 Telegram: {message}")
         await bot.send_message(TELEGRAM_CHAT_ID, message, reply_markup=reply_markup)
     except TelegramRetryAfter as e:
         await asyncio.sleep(e.retry_after)
-await send_message_safe(
-    f"{emoji} **{signal} {format_symbol(symbol)}**\n"
-    f"🔹 **Вход**: {price:.{decimal_places}f} USDT\n"
-    f"🎯 **TP**: {tp:.{decimal_places}f} USDT\n"
-    f"⛔ **SL**: {sl:.{decimal_places}f} USDT",
-    reply_markup=get_trade_keyboard()
-)
+        await send_message_safe(message, reply_markup)
     except Exception as e:
-        print(f"❌ Ошибка Telegram: {e}")
+        print(f"❌ Telegram error: {e}")
 
+# === Команда /отчет ===
 @router.message(Command(commands=["отчет", "report"]))
 async def report_handler(message: types.Message):
-    global total_trades, tp_count, sl_count
     if total_trades == 0:
         await message.answer("📊 Пока нет завершённых сделок.")
         return
     tp_percent = round((tp_count / total_trades) * 100, 1)
     sl_percent = round((sl_count / total_trades) * 100, 1)
     report = (
-        f"📊 Отчет по {format_symbol(PAIR)}"
-        f"Всего сделок: {total_trades}"
-        f"🎯 TP: {tp_count} ({tp_percent}%)"
+        f"📊 Отчет по {format_symbol(PAIR)}\n"
+        f"Всего сделок: {total_trades}\n"
+        f"🎯 TP: {tp_count} ({tp_percent}%)\n"
         f"⛔ SL: {sl_count} ({sl_percent}%)"
     )
     await message.answer(report)
 
+# === WebSocket Binance ===
 async def start_futures_websocket():
     while True:
         try:
-            print("🔄 Подключение к WebSocket Binance Futures...")
-            loop = asyncio.get_event_loop()
             ws = websocket.WebSocketApp(
                 "wss://fstream.binance.com/ws",
-                on_message=lambda ws, msg: loop.create_task(process_futures_message(msg)),
+                on_message=lambda ws, msg: asyncio.create_task(process_futures_message(msg)),
                 on_open=lambda ws: ws.send(json.dumps({
                     "method": "SUBSCRIBE",
                     "params": [f"{PAIR.lower()}@trade"],
@@ -141,83 +133,88 @@ async def start_futures_websocket():
             print(f"❌ WebSocket ошибка: {e}")
             await asyncio.sleep(5)
 
+# === Обработка входящих сообщений ===
 async def process_futures_message(message):
     global total_trades, tp_count, sl_count
     try:
         data = json.loads(message)
-        if 's' in data and 'p' in data:
-            symbol = data['s']
-            price_str = data['p']
-            price = float(price_str)
-            decimal_places = get_decimal_places_from_string(price_str)
-            if price <= 0:
+        if 's' not in data or 'p' not in data:
+            return
+
+        symbol = data['s']
+        price_str = data['p']
+        price = float(price_str)
+        decimal_places = get_decimal_places_from_string(price_str)
+        if price <= 0:
+            return
+
+        if symbol in active_trades:
+            trade = active_trades[symbol]
+            if (trade["signal"] == "LONG" and price >= trade["tp"]) or \
+               (trade["signal"] == "SHORT" and price <= trade["tp"]):
+                total_trades += 1
+                tp_count += 1
+                del active_trades[symbol]
+                await send_message_safe(f"✅ **{format_symbol(symbol)} достиг TP ({trade['tp']:.{decimal_places}f} USDT)** 🎯")
                 return
-            print(f"📊 {symbol}: {price:.{decimal_places}f} USDT")
-
-            if symbol in active_trades:
-                trade = active_trades[symbol]
-                if (trade["signal"] == "LONG" and price >= trade["tp"]) or                    (trade["signal"] == "SHORT" and price <= trade["tp"]):
-                    del active_trades[symbol]
-                    total_trades += 1
-                    tp_count += 1
-                    await send_message_safe(f"✅ **{format_symbol(symbol)} достиг TP ({trade['tp']:.{decimal_places}f} USDT)** 🎯")
-                    return
-                if (trade["signal"] == "LONG" and price <= trade["sl"]) or                    (trade["signal"] == "SHORT" and price >= trade["sl"]):
-                    del active_trades[symbol]
-                    total_trades += 1
-                    sl_count += 1
-                    await send_message_safe(f"❌ **{format_symbol(symbol)} достиг SL ({trade['sl']:.{decimal_places}f} USDT)** ⛔")
-                    return
+            if (trade["signal"] == "LONG" and price <= trade["sl"]) or \
+               (trade["signal"] == "SHORT" and price >= trade["sl"]):
+                total_trades += 1
+                sl_count += 1
+                del active_trades[symbol]
+                await send_message_safe(f"❌ **{format_symbol(symbol)} достиг SL ({trade['sl']:.{decimal_places}f} USDT)** ⛔")
                 return
+            return
 
-            price_history[symbol].append(price)
-            if len(price_history[symbol]) > 50:
-                price_history[symbol].pop(0)
+        price_history[symbol].append(price)
+        if len(price_history[symbol]) > 50:
+            price_history[symbol].pop(0)
 
-            df = pd.DataFrame(price_history[symbol], columns=['close'])
-            if len(df) < 14:
-                return
-            df['RSI'] = compute_rsi(df['close'])
-            df['MACD'], df['Signal_Line'] = compute_macd(df['close'])
-            df['ATR'] = compute_atr(df['close'])
+        df = pd.DataFrame(price_history[symbol], columns=["close"])
+        if len(df) < 14:
+            return
 
-            last_rsi = df['RSI'].iloc[-1]
-            last_macd = df['MACD'].iloc[-1]
-            last_signal = df['Signal_Line'].iloc[-1]
-            last_atr = df['ATR'].iloc[-1]
+        df["RSI"] = compute_rsi(df["close"])
+        df["MACD"], df["Signal_Line"] = compute_macd(df["close"])
+        df["ATR"] = compute_atr(df["close"])
 
-            if pd.isna(last_rsi) or pd.isna(last_macd) or pd.isna(last_signal) or pd.isna(last_atr):
-                return
-            if last_atr < ATR_MIN or last_atr > ATR_MAX:
-                return
-            if abs(last_macd - last_signal) < 0.002:
-                return
+        last_rsi = df["RSI"].iloc[-1]
+        last_macd = df["MACD"].iloc[-1]
+        last_signal = df["Signal_Line"].iloc[-1]
+        last_atr = df["ATR"].iloc[-1]
 
-            signal = None
-            if last_macd > last_signal and last_rsi < 60:
-                signal = "LONG"
-            elif last_macd < last_signal and last_rsi > 40:
-                signal = "SHORT"
-            if not signal:
-                return
+        if pd.isna(last_rsi) or pd.isna(last_macd) or pd.isna(last_signal) or pd.isna(last_atr):
+            return
+        if last_atr < ATR_MIN or last_atr > ATR_MAX:
+            return
+        if abs(last_macd - last_signal) < 0.002:
+            return
 
-            tp, sl = compute_tp_sl(price, last_atr, signal, decimal_places)
-            active_trades[symbol] = {"signal": signal, "entry": price, "tp": tp, "sl": sl}
+        signal = None
+        if last_macd > last_signal and last_rsi < 60:
+            signal = "LONG"
+        elif last_macd < last_signal and last_rsi > 40:
+            signal = "SHORT"
+        if not signal:
+            return
 
-            emoji = "🟢" if signal == "LONG" else "🔴"
-            await send_message_safe(
-                f"{emoji} **{signal} {format_symbol(symbol)}**"
-                f"🔹 **Вход**: {price:.{decimal_places}f} USDT"
-                f"🎯 **TP**: {tp:.{decimal_places}f} USDT"
-                f"⛔ **SL**: {sl:.{decimal_places}f} USDT",
-                reply_markup=get_trade_keyboard()
-            )
+        tp, sl = compute_tp_sl(price, last_atr, signal, decimal_places)
+        active_trades[symbol] = {"signal": signal, "entry": price, "tp": tp, "sl": sl}
+
+        emoji = "🟢" if signal == "LONG" else "🔴"
+        await send_message_safe(
+            f"{emoji} **{signal} {format_symbol(symbol)}**\n"
+            f"🔹 **Вход**: {price:.{decimal_places}f} USDT\n"
+            f"🎯 **TP**: {tp:.{decimal_places}f} USDT\n"
+            f"⛔ **SL**: {sl:.{decimal_places}f} USDT",
+            reply_markup=get_trade_keyboard()
+        )
 
     except Exception as e:
-        print(f"❌ Ошибка обработки: {e}")
+        print(f"❌ Ошибка обработки сообщения: {e}")
 
+# === Запуск ===
 async def main():
-    print("🚀 Бот запущен (ETHUSDT + TP/SL + кнопки + форматирование)")
     dp.include_router(router)
     asyncio.create_task(start_futures_websocket())
     await dp.start_polling(bot)
