@@ -30,7 +30,6 @@ total_trades = 0
 tp_count = 0
 sl_count = 0
 
-# === Индикаторы ===
 def compute_rsi(prices, period=14):
     delta = prices.diff()
     gain = delta.where(delta > 0, 0).rolling(window=period).mean()
@@ -70,7 +69,6 @@ def get_trade_keyboard():
          InlineKeyboardButton(text="❌ Вышел по SL", callback_data="manual_sl")]
     ])
 
-# === Обработчик ручного выхода ===
 @router.callback_query(F.data.in_({"manual_tp", "manual_sl"}))
 async def manual_exit_handler(callback: types.CallbackQuery):
     global total_trades, tp_count, sl_count
@@ -89,7 +87,6 @@ async def manual_exit_handler(callback: types.CallbackQuery):
         await callback.message.answer(text)
     await callback.answer()
 
-# === Безопасная отправка сообщений ===
 async def send_message_safe(message, reply_markup=None):
     try:
         await bot.send_message(TELEGRAM_CHAT_ID, message, reply_markup=reply_markup)
@@ -99,7 +96,6 @@ async def send_message_safe(message, reply_markup=None):
     except Exception as e:
         print(f"❌ Telegram error: {e}")
 
-# === Команда /отчет ===
 @router.message(Command(commands=["отчет", "report"]))
 async def report_handler(message: types.Message):
     if total_trades == 0:
@@ -115,13 +111,18 @@ async def report_handler(message: types.Message):
     )
     await message.answer(report)
 
-# === WebSocket Binance ===
 async def start_futures_websocket():
     while True:
         try:
+            print("🔄 Подключение к WebSocket Binance Futures...")
+            loop = asyncio.get_event_loop()
+
+            def on_message(ws, msg):
+                loop.call_soon_threadsafe(asyncio.create_task, process_futures_message(msg))
+
             ws = websocket.WebSocketApp(
                 "wss://fstream.binance.com/ws",
-                on_message=lambda ws, msg: asyncio.create_task(process_futures_message(msg)),
+                on_message=on_message,
                 on_open=lambda ws: ws.send(json.dumps({
                     "method": "SUBSCRIBE",
                     "params": [f"{PAIR.lower()}@trade"],
@@ -133,7 +134,6 @@ async def start_futures_websocket():
             print(f"❌ WebSocket ошибка: {e}")
             await asyncio.sleep(5)
 
-# === Обработка входящих сообщений ===
 async def process_futures_message(message):
     global total_trades, tp_count, sl_count
     try:
@@ -213,7 +213,6 @@ async def process_futures_message(message):
     except Exception as e:
         print(f"❌ Ошибка обработки сообщения: {e}")
 
-# === Запуск ===
 async def main():
     dp.include_router(router)
     asyncio.create_task(start_futures_websocket())
