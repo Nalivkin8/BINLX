@@ -85,8 +85,10 @@ async def report_handler(message: types.Message):
     if total_trades == 0:
         await message.answer("📊 Пока нет завершённых сделок.")
         return
+
     tp_percent = round((tp_count / total_trades) * 100, 1)
     sl_percent = round((sl_count / total_trades) * 100, 1)
+
     report = (
         f"📊 Отчет по {format_symbol(PAIR)}
 "
@@ -96,6 +98,7 @@ async def report_handler(message: types.Message):
 "
         f"⛔ SL: {sl_count} ({sl_percent}%)"
     )
+
     await message.answer(report)
 
 @router.callback_query(F.data.in_({"manual_tp", "manual_sl"}))
