@@ -29,6 +29,8 @@ active_trades = {}
 total_trades = 0
 tp_count = 0
 sl_count = 0
+manual_tp_count = 0
+manual_sl_count = 0
 
 def compute_rsi(prices, period=14):
     delta = prices.diff()
@@ -71,16 +73,16 @@ def get_trade_keyboard():
 
 @router.callback_query(F.data.in_({"manual_tp", "manual_sl"}))
 async def manual_exit_handler(callback: types.CallbackQuery):
-    global total_trades, tp_count, sl_count
+    global total_trades, manual_tp_count, manual_sl_count
     symbol = PAIR
     trade = active_trades.get(symbol)
     if trade:
         if callback.data == "manual_tp":
-            tp_count += 1
-            text = f"✅ Сделка по {format_symbol(symbol)} вручную закрыта как TP"
+            manual_tp_count += 1
+            text = f"✋ Сделка по {format_symbol(symbol)} вручную закрыта как TP"
         else:
-            sl_count += 1
-            text = f"❌ Сделка по {format_symbol(symbol)} вручную закрыта как SL"
+            manual_sl_count += 1
+            text = f"✋ Сделка по {format_symbol(symbol)} вручную закрыта как SL"
         total_trades += 1
         del active_trades[symbol]
         await callback.message.edit_reply_markup(reply_markup=None)
@@ -98,16 +100,20 @@ async def send_message_safe(message, reply_markup=None):
 
 @router.message(Command(commands=["отчет", "report"]))
 async def report_handler(message: types.Message):
-    if total_trades == 0:
+    total_all = total_trades
+    if total_all == 0:
         await message.answer("📊 Пока нет завершённых сделок.")
         return
-    tp_percent = round((tp_count / total_trades) * 100, 1)
-    sl_percent = round((sl_count / total_trades) * 100, 1)
+
+    def pct(x): return round((x / total_all) * 100, 1)
+
     report = (
         f"📊 Отчет по {format_symbol(PAIR)}\n"
-        f"Всего сделок: {total_trades}\n"
-        f"🎯 TP: {tp_count} ({tp_percent}%)\n"
-        f"⛔ SL: {sl_count} ({sl_percent}%)"
+        f"Всего сделок: {total_all}\n"
+        f"🎯 TP: {tp_count} ({pct(tp_count)}%)\n"
+        f"⛔ SL: {sl_count} ({pct(sl_count)}%)\n"
+        f"✋ Ручной TP: {manual_tp_count} ({pct(manual_tp_count)}%)\n"
+        f"✋ Ручной SL: {manual_sl_count} ({pct(manual_sl_count)}%)"
     )
     await message.answer(report)
 
